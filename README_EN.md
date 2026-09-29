@@ -4,6 +4,7 @@
 
 [![license](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg)](https://nodejs.org)
+[![release](https://img.shields.io/github/v/release/LiuSantu123/codex-ocfree)](https://github.com/LiuSantu123/codex-ocfree/releases)
 
 Full documentation (Chinese): [README.md](README.md)
 
@@ -18,19 +19,24 @@ Full documentation (Chinese): [README.md](README.md)
 Requirements: Node.js ≥ 22, [codex-cli](https://github.com/openai/codex) (tested on 0.157–0.158; **this profile needs no OpenAI login** — verified to work without an `auth.json`). [opencode](https://opencode.ai) is **optional**: with it the local `opencode.db` cache is used, without it metadata is fetched from [models.dev](https://models.dev) automatically.
 
 ```bash
-# install (either):
-bash install.sh                                 # one shot: checks + clone + link + setup
-npm i -g git+https://github.com/LiuSantu123/codex-ocfree.git   # after publishing
-# or manually:
-git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && npm link
-#   npm link provides both: codex-ocfree (full) / ocfree (short)
-#   without npm, install.sh falls back to symlinks in ~/.local/bin
+# install (pick one; A recommended)
+# A. clone + one shot: environment checks + link commands + setup
+git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && bash install.sh
 
-codex-ocfree setup          # one shot: profile + probe (~1 min on first run, --no-probe to skip)
-                            #           + catalog + session isolation + shell wrapper
+# B. release asset: no clone, no npm registry (tgz attached to the release)
+npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.1.0/codex-ocfree-0.1.0.tgz && codex-ocfree setup
+
+# C. straight from npm, GitHub source
+npm i -g --allow-git=all git+https://github.com/LiuSantu123/codex-ocfree.git && codex-ocfree setup
+#   B/C give you both commands: codex-ocfree (full) / ocfree (short)
+
 codex-ocfree up             # start the bridge
 codex --profile opencode    # sessions/history isolated from plain `codex`
 ```
+
+`setup` = write the profile + probe available models (~1 min first run, `--no-probe` to skip) + build the catalog + install session isolation + shell wrapper; `install.sh` (A) already runs it. Machines without npm fall back to `~/.local/bin` symlinks.
+
+> npm ≥ 12 disables git sources and remote tarballs by default (`allow-git` / `allow-remote` = `none`, supply-chain hardening) — hence the `--allow-*` flags on B/C (unneeded on npm ≤ 11). Alternatively download the tgz and install the local file: `npm i -g ./codex-ocfree-0.1.0.tgz` (local files need no flags).
 
 Day to day you only need `codex-ocfree up` and `codex --profile opencode`. The upstream free pool changes over time — run `codex-ocfree refresh` occasionally to update the working-model list.
 

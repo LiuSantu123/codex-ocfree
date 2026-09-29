@@ -5,6 +5,7 @@
 [![license](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg)](https://nodejs.org)
 [![platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg)](#)
+[![release](https://img.shields.io/github/v/release/LiuSantu123/codex-ocfree)](https://github.com/LiuSantu123/codex-ocfree/releases)
 
 > English: [README_EN.md](README_EN.md)
 
@@ -47,19 +48,24 @@ https://opencode.ai/inference/openai/v1/chat/completions   ← OpenCode Zen 免�
 - ~~opencode~~ **可选**：有它就用本地 `opencode.db` 缓存；没有则自动改从 [models.dev](https://models.dev) 在线获取模型元数据
 
 ```bash
-# 安装（三选一，推荐第一个）
-bash install.sh                             # 一键：检查环境 + clone + 链接命令 + setup
-npm i -g git+https://github.com/LiuSantu123/codex-ocfree.git   # 发布后可用
-# 或手动:
-git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && npm link
-#   npm link 后两个命令都可用：codex-ocfree（全名） / ocfree（短别名）
-#   无 npm 时 install.sh 自动降级为 ~/.local/bin 软链
+# 安装（三选一，A 推荐）
+# A. clone 一键装：检查环境 + 链接命令 + setup 全自动
+git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && bash install.sh
 
-codex-ocfree setup      # 一键：写 profile + 探测可用模型(首次约1分钟,--no-probe跳过)
-                        #       + 生成模型目录 + 会话隔离 + shell 包装
-codex-ocfree up         # 起协议桥
+# B. Release 离线包：不 clone、不经 npm registry（tgz 是 release 附件）
+npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.1.0/codex-ocfree-0.1.0.tgz && codex-ocfree setup
+
+# C. npm 直装（走 GitHub 源）
+npm i -g --allow-git=all git+https://github.com/LiuSantu123/codex-ocfree.git && codex-ocfree setup
+#   B/C 装完两个命令都可用：codex-ocfree（全名）/ ocfree（短别名）
+
+codex-ocfree up               # 起协议桥
 codex --profile opencode      # 开聊；会话历史与裸 codex 完全隔离
 ```
+
+`setup` = 写 profile + 探测可用模型（首次约 1 分钟，`--no-probe` 跳过）+ 生成模型目录 + 会话隔离 + shell 包装；方式 A 的 `install.sh` 已包含 setup。无 npm 的机器上 `install.sh` 自动降级为 `~/.local/bin` 软链。
+
+> npm ≥ 12 出于供应链安全默认 `allow-git=none` / `allow-remote=none`（禁用 git 源与远程 tarball 直装），所以 B/C 需要 `--allow-*` 放行（npm ≤ 11 可省略）。也可以把 tgz 下载到本地后安装：`npm i -g ./codex-ocfree-0.1.0.tgz`（本地文件不触发白名单）。
 
 之后日常只需要两条命令：`codex-ocfree up`（桥常驻即可）和 `codex --profile opencode`。上游免费池会变，隔段时间跑一次 `codex-ocfree refresh` 更新可用模型。
 

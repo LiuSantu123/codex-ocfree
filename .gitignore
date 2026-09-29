@@ -15,6 +15,7 @@ secrets/
 *.log
 *.pid
 availability.json
+*.tgz
 
 # editor / os
 .DS_Store
