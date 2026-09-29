@@ -1,0 +1,41 @@
+{
+  "name": "codex-ocfree",
+  "version": "0.1.0",
+  "description": "OpenCode free models in Codex CLI: local protocol bridge, per-profile session isolation, and TUI model switching",
+  "type": "module",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "LiuSantu123",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LiuSantu123/codex-ocfree.git"
+  },
+  "bin": {
+    "codex-ocfree": "bin/codex-ocfree.mjs",
+    "ocfree": "bin/codex-ocfree.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "templates",
+    "install.sh",
+    "LICENSE",
+    "README.md",
+    "README_EN.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "codex",
+    "opencode",
+    "codex-cli",
+    "ocfree",
+    "profile",
+    "bridge",
+    "free-models"
+  ],
+  "scripts": {
+    "start": "node bin/codex-ocfree.mjs",
+    "doctor": "node bin/codex-ocfree.mjs doctor"
+  }
+}

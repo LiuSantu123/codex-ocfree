@@ -1,0 +1,20 @@
+# codex-ocfree "opencode" profile — OpenCode Zen 免费模型（经本地协议桥）
+# 启动:  codex --profile opencode        管理桥:  codex-ocfree up / down / status
+# 切模型: codex-ocfree use <slug>   或   codex --profile opencode -m <slug>
+#
+# 由 `codex-ocfree setup` 渲染生成；@TOKEN@ 会被替换为实际值。
+
+model = "@MODEL@"
+model_catalog_json = "@CATALOG@"
+model_provider = "opencode-free"
+model_reasoning_effort = "medium"
+
+[model_providers.opencode-free]
+  name = "OpenCode Zen (free, via local bridge)"
+  base_url = "http://127.0.0.1:@PORT@/v1"
+  wire_api = "responses"
+  requires_openai_auth = false
+  experimental_bearer_token = "oc-free-bridge"
+  request_max_retries = 2
+  stream_max_retries = 3
+  stream_idle_timeout_ms = 300000

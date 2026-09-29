@@ -1,0 +1,13 @@
+# ~/.codex/config.toml — 基础（默认）配置示例
+# 裸 `codex` 使用这个文件；`codex --profile X` 在其上叠加 ~/.codex/X.config.toml。
+# 注意：这里如果写死了 model/model_provider，opencode profile 会覆盖它们 —— profile 必须
+# 自带 model + model_provider，否则免费模型请求会带着默认 provider 打出去而失败。
+#
+# 此文件仅为参考，codex-ocfree 不会修改你的 ~/.codex/config.toml。
+
+# model = "gpt-5.5-codex"
+# model_reasoning_effort = "medium"
+
+# 可选：允许 codex 访问网络（按需开启）
+# [tools]
+# web_search = true

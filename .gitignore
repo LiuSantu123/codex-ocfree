@@ -1,0 +1,23 @@
+# runtime
+node_modules/
+*.tsbuildinfo
+
+# never commit real configs / secrets
+*.local
+.env
+.env.*
+secrets/
+*.token
+*.pem
+
+# local state
+.codex-ocfree/
+*.log
+*.pid
+availability.json
+
+# editor / os
+.DS_Store
+.idea/
+.vscode/
+*.swp
