@@ -35,6 +35,7 @@ import { probe } from './probe.mjs';
 import { init, listHomes, codexHomeFor, wrapperSnippet, rcPath, detectShell } from './profiles.mjs';
 import { select } from './tui.mjs';
 import { doctor } from './doctor.mjs';
+import { cmdQuota, quotaBrief } from './quota.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION = (() => {
@@ -64,6 +65,7 @@ ${bold('模型')}
   ${cyan('codex-ocfree use <slug> [-p <p>]')}     直接设默认模型
   ${cyan('codex-ocfree refresh [--all]')}         重新探测可用模型 + 重建目录（--all 含不可用）
   ${cyan('codex-ocfree probe [id ...]')}          只探测可用性（写 ~/.codex-ocfree/availability.json）
+  ${cyan('codex-ocfree quota [usage]')}           免费额度估计（本地统计 + ~200次/5h 参考；对话内也可问模型）
 
 ${bold('profile / 会话隔离')}
   ${cyan('codex-ocfree profile')}                 列出隔离 home 与启动方式
@@ -72,7 +74,7 @@ ${bold('profile / 会话隔离')}
   ${cyan('codex-ocfree shell [zsh|bash]')}        打印 codex() 包装片段（默认按 \$SHELL）
 
 ${bold('其它')}
-  ${dim('环境变量: OC2C_PORT(8973) OC2C_UA OC2C_DB OC2C_CATALOG OC2C_UPSTREAM OC2C_STATE OC2C_ALL  PROBE_TIMEOUT_MS(15000) PROBE_CONCURRENCY(4)')}
+  ${dim('环境变量: OC2C_PORT(8973) OC2C_UA OC2C_DB OC2C_CATALOG OC2C_UPSTREAM OC2C_STATE OC2C_ALL OC2C_LIMIT_5H(200)  PROBE_TIMEOUT_MS(15000) PROBE_CONCURRENCY(4)')}
 
 用法示例:
   bash install.sh                          # 新用户一键装
@@ -191,10 +193,12 @@ async function cmdStatus() {
     console.log(`  catalog:  ${CATALOG}`);
     const models = readCatalog();
     console.log(`  models:   ${models.length}`);
-    return 0;
+  } else {
+    console.log('bridge down');
   }
-  console.log('bridge down');
-  return 1;
+  const qb = quotaBrief();
+  console.log(`quota:      ${qb || dim('暂无记录')}${qb ? dim('  (codex-ocfree quota 详情)') : ''}`);
+  return h ? 0 : 1;
 }
 
 async function cmdRefresh(opts) {
@@ -391,6 +395,9 @@ export async function main(argv = process.argv.slice(2)) {
       return await bridgeCtl('serve');
     case 'status':
       return await cmdStatus();
+    case 'quota':
+    case 'usage':
+      return cmdQuota();
     case 'refresh':
       return await cmdRefresh(opts);
     case 'probe':

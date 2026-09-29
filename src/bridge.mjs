@@ -30,6 +30,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { recordUsage, quotaLine } from './usage.mjs';
 
 const STATE_DIR = process.env.OC2C_STATE || path.join(os.homedir(), '.codex-ocfree');
 fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -120,7 +121,13 @@ function textOf(content) {
  */
 function toChatBody(r) {
   const messages = [];
-  if (r.instructions) messages.push({ role: 'system', content: String(r.instructions) });
+  // free-tier usage note (local estimate) so the model can answer quota questions in-chat
+  const usageNote = quotaLine();
+  if (r.instructions) {
+    messages.push({ role: 'system', content: String(r.instructions) + (usageNote ? '\n\n' + usageNote : '') });
+  } else if (usageNote) {
+    messages.push({ role: 'system', content: usageNote });
+  }
 
   const input =
     typeof r.input === 'string'
@@ -447,6 +454,15 @@ async function handleResponses(req, res) {
 
   const { body: chatBody, aliases } = toChatBody(r);
   log(`responses: model=${chatBody.model} msgs=${chatBody.messages.length} tools=${chatBody.tools.length} aliases=${[...aliases].join(',')}`);
+  const t0 = Date.now();
+  const recordChat = (status, usage, err) => {
+    recordUsage({
+      kind: 'chat', model: chatBody.model, status,
+      ...(usage ? { usage } : {}),
+      ...(err ? { err } : {}),
+      ms: Date.now() - t0,
+    });
+  };
 
   let upstream;
   try {
@@ -458,6 +474,13 @@ async function handleResponses(req, res) {
   if (!upstream.ok) {
     const txt = await upstream.text().catch(() => '');
     log(`upstream ${upstream.status}: ${txt.slice(0, 300)}`);
+    let err = null;
+    try {
+      const j = JSON.parse(txt);
+      const e = j && (j.error || j);
+      if (e && (e.type || e.message)) err = { type: String(e.type || 'error'), message: String(e.message || '').slice(0, 200) };
+    } catch { /* non-JSON error body */ }
+    recordChat(upstream.status, null, err);
     res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' });
     return res.end(txt);
   }
@@ -486,10 +509,12 @@ async function handleResponses(req, res) {
       }
     } catch (e) {
       log('stream read error:', e.message);
+      recordChat('failed', null, { type: 'upstream_error', message: String(e.message).slice(0, 200) });
       return jsonReply(res, 502, { error: { message: 'bridge: upstream stream error: ' + e.message, type: 'upstream_error' } });
     }
     const finalStatus = conv.empty() ? 'failed' : 'completed';
     const final = conv.finish(finalStatus, finalStatus === 'failed' ? 'upstream returned an empty stream' : null);
+    recordChat(finalStatus, final.usage || null, finalStatus === 'failed' ? { type: 'empty_stream', message: 'upstream returned an empty stream' } : null);
     return jsonReply(res, finalStatus === 'failed' ? 502 : 200, final);
   }
 
@@ -510,7 +535,13 @@ async function handleResponses(req, res) {
   const finalize = (status, msg) => {
     if (finished) return;
     finished = true;
-    try { conv.finish(status, msg); } catch (e) { log('finish error:', e.message); }
+    let fin = null;
+    try { fin = conv.finish(status, msg); } catch (e) { log('finish error:', e.message); }
+    recordChat(
+      status,
+      fin && fin.usage ? fin.usage : null,
+      msg ? { type: status === 'completed' ? 'stream' : String(status), message: String(msg).slice(0, 200) } : null,
+    );
     res.end();
   };
 
@@ -536,6 +567,7 @@ async function handleResponses(req, res) {
     if (winner === 'client') {
       log('client disconnected, aborting upstream');
       try { await upstream.body.cancel(); } catch { /* ignore */ }
+      recordChat('aborted', null, { type: 'client_gone', message: 'client disconnected before completion' });
       return;
     }
     if (conv.empty()) finalize('failed', 'upstream returned an empty stream');
@@ -545,6 +577,7 @@ async function handleResponses(req, res) {
     if (!finished) {
       try { conv.finish('failed', e.message); } catch { /* ignore */ }
       finished = true;
+      recordChat('failed', null, { type: 'stream_error', message: String(e.message).slice(0, 200) });
       res.end();
     }
   }

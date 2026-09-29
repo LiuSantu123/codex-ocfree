@@ -33,6 +33,7 @@ https://opencode.ai/inference/openai/v1/chat/completions   ← OpenCode Zen 免�
 | **协议桥** | Codex 只认 `wire_api="responses"`，免费模型只认 `/chat/completions` — 本地无依赖桥做双向转换（Node ≥22，零第三方包） |
 | **会话隔离** | `codex --profile X` 默认与裸 `codex` 共享全部会话/历史；codex-ocfree 给每个 profile 一份独立 `CODEX_HOME`（`~/.codex.d/X/`），配置和 skills 仍 symlink 共享 |
 | **模型切换** | `codex-ocfree models` 终端 TUI 一键切默认模型；`codex-ocfree refresh` 探测上游真实可用性，只列能用的 |
+| **额度显示** | `codex-ocfree quota` 本地统计今日/5h 窗口用量与触顶记录；对话里直接问模型“额度还剩多少”也能答 |
 | **一键体检** | `codex-ocfree doctor` 检查运行时、桥、profile 配置、模型目录、隔离 home、shell 集成 |
 
 ### 和 cc-switch 的关系
@@ -53,7 +54,7 @@ https://opencode.ai/inference/openai/v1/chat/completions   ← OpenCode Zen 免�
 git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && bash install.sh
 
 # B. Release 离线包：不 clone、不经 npm registry（tgz 是 release 附件）
-npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.1.0/codex-ocfree-0.1.0.tgz && codex-ocfree setup
+npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.2.0/codex-ocfree-0.2.0.tgz && codex-ocfree setup
 
 # C. npm 直装（走 GitHub 源）
 npm i -g --allow-git=all git+https://github.com/LiuSantu123/codex-ocfree.git && codex-ocfree setup
@@ -65,7 +66,7 @@ codex --profile opencode      # 开聊；会话历史与裸 codex 完全隔离
 
 `setup` = 写 profile + 探测可用模型（首次约 1 分钟，`--no-probe` 跳过）+ 生成模型目录 + 会话隔离 + shell 包装；方式 A 的 `install.sh` 已包含 setup。无 npm 的机器上 `install.sh` 自动降级为 `~/.local/bin` 软链。
 
-> npm ≥ 12 出于供应链安全默认 `allow-git=none` / `allow-remote=none`（禁用 git 源与远程 tarball 直装），所以 B/C 需要 `--allow-*` 放行（npm ≤ 11 可省略）。也可以把 tgz 下载到本地后安装：`npm i -g ./codex-ocfree-0.1.0.tgz`（本地文件不触发白名单）。
+> npm ≥ 12 出于供应链安全默认 `allow-git=none` / `allow-remote=none`（禁用 git 源与远程 tarball 直装），所以 B/C 需要 `--allow-*` 放行（npm ≤ 11 可省略）。也可以把 tgz 下载到本地后安装：`npm i -g ./codex-ocfree-0.2.0.tgz`（本地文件不触发白名单）。
 
 之后日常只需要两条命令：`codex-ocfree up`（桥常驻即可）和 `codex --profile opencode`。上游免费池会变，隔段时间跑一次 `codex-ocfree refresh` 更新可用模型。
 
@@ -86,6 +87,7 @@ codex-ocfree use <slug> [-p <p>]       直接设置默认模型
 codex-ocfree refresh [--all]           重新探测可用性 + 重建模型目录（--all 含不可用模型）
 codex-ocfree probe [id ...]            只探测可用性
 codex-ocfree catalog                   只重建模型目录
+codex-ocfree quota [usage]             免费额度估计（本地统计 + ~200次/5h 参考 + 触顶记录）
 
 codex-ocfree profile                   列出隔离 home 与启动方式
 codex-ocfree profile add <name>        新建一个隔离 home
@@ -122,6 +124,16 @@ codex-ocfree run -p opencode exec --skip-git-repo-check "..."   # 一条命令�
 
 改了模型目录**不需要重启桥**；桥只管转发，`GET /v1/models` 每次实时读目录。
 
+## 每日额度显示
+
+上游**不回传任何 rate-limit / 余量响应头**（实测只有 `x-opencode-*` 元数据头），官方也没公布免费额度数字，所以 codex-ocfree 只能也只应给“**大概**”：
+
+- **本地统计**：桥把每次真正打到上游的请求（对话 + `probe` 探测）追加到 `~/.codex-ocfree/usage.jsonl`（状态、token 数、耗时、429 触顶），保留 30 天。
+- **`codex-ocfree quota`**：今日/5 小时窗口/昨日请求次数与 token、模型分布、触顶（429 `FreeUsageLimitError`）记录，附参考进度条。
+- **对话内可问**：桥会把一行 `[free-tier usage — local estimate] …` 注入系统消息，所以直接在 codex 里问“额度还剩多少”，模型会引用本地数字回答（有记录才注入，全新安装首条请求不带）。
+- **参考上限**：社区实测约 **200 次 / 5 小时**（[opencode#33495](https://github.com/anomalyco/opencode/issues/33495) 的 429 报错），非官方数字；`OC2C_LIMIT_5H=<n>` 改参考值，`0` 关闭进度条，天数参考值按 `24/5h` 窗口推算。
+- 真触顶时上游直接回 429，codex 会看到错误正文——等滑动窗口过期（约 5 小时尺度）再继续。
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
@@ -133,7 +145,8 @@ codex-ocfree run -p opencode exec --skip-git-repo-check "..."   # 一条命令�
 | `OC2C_DB` | `~/.local/share/opencode/opencode.db` | 模型元数据 / OAuth token 来源 |
 | `OC2C_CATALOG` | `~/.codex/opencode.models.json` | 模型目录路径 |
 | `OC2C_TIMEOUT_MS` | `600000` | 上游请求超时 |
-| `OC2C_STATE` | `~/.codex-ocfree` | pid / 日志 / availability 存放处 |
+| `OC2C_STATE` | `~/.codex-ocfree` | pid / 日志 / availability / 用量记录（`usage.jsonl`）存放处 |
+| `OC2C_LIMIT_5H` | `200` | 额度参考上限（次/5h），`0` 关闭 quota 进度条 |
 | `OC2C_ALL` | — | 设 `1` 时目录包含未探测可用的模型 |
 | `PROBE_TIMEOUT_MS` | `15000` | 单模型探测超时（死模型快速判定） |
 | `PROBE_CONCURRENCY` | `4` | 探测并发数 |
@@ -146,6 +159,7 @@ codex-ocfree run -p opencode exec --skip-git-repo-check "..."   # 一条命令�
 | codex 报 `Model is unavailable` | 上游模型下线（不是桥的问题）。跑 `codex-ocfree refresh` |
 | `ModelProtocolUnsupported` | 请求打到了 `/responses`：检查 profile `base_url = "http://127.0.0.1:8973/v1"`、`wire_api = "responses"`、桥在跑（`codex-ocfree status`） |
 | 403 / `FreeTierError` | 上游门禁变了：UA 需 `opencode/<semver>/cli`、session 需 `ses_`+12hex+14 位、body 需 `stream:true` 且 tools 含 `read`+`shell`。改 `src/bridge.mjs` 的 `gateHeaders()` |
+| 429 / `FreeUsageLimitError` | 免费额度触顶（约 200 次/5h 窗口，社区实测值）。等窗口滑过；`codex-ocfree quota` 看本地进度与触顶记录 |
 | 401 | 过期 OAuth token；桥会自动降级为匿名重试，仍持续就 `codex-ocfree down && codex-ocfree up` |
 | codex 警告 `Model metadata not found` | `model_catalog_json` 路径不对，或 JSON 含 Codex 不认的枚举 — 用 `codex-ocfree catalog` 重新生成 |
 | `codex --profile X` 没隔离会话 | shell 包装没装/没重载 — `codex-ocfree doctor` 看那一行（bash/zsh 都检查），或用 `codex-ocfree run -p X` |
@@ -163,6 +177,8 @@ codex-ocfree/
 │   ├── profiles.mjs        CODEX_HOME 隔离 + bash/zsh codex() 包装
 │   ├── probe.mjs           上游可用性探测
 │   ├── catalog.mjs         模型目录生成（model_catalog_json）
+│   ├── usage.mjs           本地额度用量记录与聚合（usage.jsonl）
+│   ├── quota.mjs           codex-ocfree quota 展示
 │   ├── doctor.mjs          体检
 │   ├── tui.mjs             终端选择器（方向键 / j-k / Enter）
 │   └── config.mjs          路径与共享工具

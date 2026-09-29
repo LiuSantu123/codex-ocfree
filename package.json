@@ -1,6 +1,6 @@
 {
   "name": "codex-ocfree",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenCode free models in Codex CLI: local protocol bridge, per-profile session isolation, and TUI model switching",
   "type": "module",
   "license": "PolyForm-Noncommercial-1.0.0",

@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { STATE_DIR, ensureState, dim, green, red } from './config.mjs';
 import { freeModels, loadModelsMap } from './catalog.mjs';
+import { recordUsage } from './usage.mjs';
 
 const OUT = path.join(ensureState(), 'availability.json');
 const UPSTREAM = process.env.OC2C_UPSTREAM
@@ -72,10 +73,18 @@ export async function probe(explicitIds = []) {
         signal: AbortSignal.timeout(Number(process.env.PROBE_TIMEOUT_MS || 15000)),
       });
       const t = await r.text();
+      // probes also hit the free gate — count them against local quota usage
+      if (r.status !== 200) {
+        const m = (t.match(/"message":"([^"]{0,120})/) || [, ''])[1] || `HTTP ${r.status}`;
+        recordUsage({ kind: 'probe', model: id, status: r.status, err: { type: 'http', message: m } });
+      } else {
+        recordUsage({ kind: 'probe', model: id, status: 200 });
+      }
       if (r.status === 200 && t.includes('data:')) return 'ok';
       const msg = (t.match(/"message":"([^"]{0,120})/) || [, ''])[1] || t.slice(0, 120);
       return `http${r.status}:${msg}`;
     } catch (e) {
+      recordUsage({ kind: 'probe', model: id, status: 'ERR', err: { type: 'net', message: String(e.message).slice(0, 120) } });
       return 'ERR:' + e.message;
     }
   }

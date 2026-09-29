@@ -13,6 +13,7 @@ Full documentation (Chinese): [README.md](README.md)
 - **Codex speaks the OpenAI Responses API** (`wire_api="responses"`), but the free models only answer on `/chat/completions` → a tiny local bridge converts between the two.
 - **`codex --profile X` does not isolate sessions** — every profile shares `~/.codex` history by default (`sqlite_home` doesn't help). The only reliable lever is `CODEX_HOME`, so codex-ocfree gives each profile its own home under `~/.codex.d/X/` with configs symlinked back to `~/.codex`.
 - **The free model pool changes** — codex-ocfree probes upstream availability and only lists models that actually answer.
+- **No official quota numbers exist** — the upstream returns no rate-limit headers, so `codex-ocfree quota` shows an honest local estimate (requests/tokens today, 5h window vs a community-measured ~200/5h reference, 429 hits), and the bridge injects the same figures into the system message so you can just ask the model “how much quota is left” in chat.
 
 ## Quick start
 
@@ -24,7 +25,7 @@ Requirements: Node.js ≥ 22, [codex-cli](https://github.com/openai/codex) (test
 git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && bash install.sh
 
 # B. release asset: no clone, no npm registry (tgz attached to the release)
-npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.1.0/codex-ocfree-0.1.0.tgz && codex-ocfree setup
+npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.2.0/codex-ocfree-0.2.0.tgz && codex-ocfree setup
 
 # C. straight from npm, GitHub source
 npm i -g --allow-git=all git+https://github.com/LiuSantu123/codex-ocfree.git && codex-ocfree setup
@@ -36,7 +37,7 @@ codex --profile opencode    # sessions/history isolated from plain `codex`
 
 `setup` = write the profile + probe available models (~1 min first run, `--no-probe` to skip) + build the catalog + install session isolation + shell wrapper; `install.sh` (A) already runs it. Machines without npm fall back to `~/.local/bin` symlinks.
 
-> npm ≥ 12 disables git sources and remote tarballs by default (`allow-git` / `allow-remote` = `none`, supply-chain hardening) — hence the `--allow-*` flags on B/C (unneeded on npm ≤ 11). Alternatively download the tgz and install the local file: `npm i -g ./codex-ocfree-0.1.0.tgz` (local files need no flags).
+> npm ≥ 12 disables git sources and remote tarballs by default (`allow-git` / `allow-remote` = `none`, supply-chain hardening) — hence the `--allow-*` flags on B/C (unneeded on npm ≤ 11). Alternatively download the tgz and install the local file: `npm i -g ./codex-ocfree-0.2.0.tgz` (local files need no flags).
 
 Day to day you only need `codex-ocfree up` and `codex --profile opencode`. The upstream free pool changes over time — run `codex-ocfree refresh` occasionally to update the working-model list.
 
@@ -55,11 +56,21 @@ codex-ocfree serve                run the bridge in the foreground
 codex-ocfree models               TUI picker for the default model
 codex-ocfree use <slug> [-p <p>]  set the default model
 codex-ocfree refresh [--all]      re-probe availability + rebuild the catalog
+codex-ocfree quota [usage]        approximate free-tier usage (local counts + ~200 req/5h reference + 429 hits)
 
 codex-ocfree profile [add <name>] list / create isolated homes
 codex-ocfree run [-p <p>] <args>  start bridge (as needed) + set CODEX_HOME + run codex
 codex-ocfree shell [zsh|bash]     print the codex() wrapper snippet (defaults to $SHELL)
 ```
+
+### Daily quota display
+
+The upstream sends **no rate-limit headers** (verified: only `x-opencode-*` metadata) and publishes no official numbers, so every figure is a local estimate:
+
+- Each request that reaches upstream (chat + probes) is appended to `~/.codex-ocfree/usage.jsonl` (30-day retention).
+- `codex-ocfree quota` shows today / 5h-window / yesterday counts, tokens, per-model mix and quota-hit events (429 `FreeUsageLimitError`).
+- The bridge injects a one-line `[free-tier usage — local estimate] …` note into the system message, so you can ask the model directly in codex (the note appears once at least one request has been recorded).
+- The `~200 requests / 5h` reference is community-measured ([opencode#33495](https://github.com/anomalyco/opencode/issues/33495)), not official — tune with `OC2C_LIMIT_5H=<n>` or `0` to hide the bars.
 
 ## Read before use
 
