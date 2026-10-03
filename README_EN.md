@@ -26,7 +26,7 @@ Requirements: Node.js ≥ 22, [codex-cli](https://github.com/openai/codex) (test
 git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && bash install.sh
 
 # B. release asset: no clone, no npm registry (tgz attached to the release)
-npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.0/codex-ocfree-0.3.0.tgz && codex-ocfree setup
+npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.1/codex-ocfree-0.3.1.tgz && codex-ocfree setup
 
 # C. straight from npm, GitHub source
 npm i -g --allow-git=all git+https://github.com/LiuSantu123/codex-ocfree.git && codex-ocfree setup
@@ -38,7 +38,7 @@ codex --profile opencode    # sessions/history isolated from plain `codex`
 
 `setup` = write the profile + probe available models (~1 min first run, `--no-probe` to skip) + build the catalog + install session isolation + shell wrapper; `install.sh` (A) already runs it. Machines without npm fall back to `~/.local/bin` symlinks.
 
-> npm ≥ 12 disables git sources and remote tarballs by default (`allow-git` / `allow-remote` = `none`, supply-chain hardening) — hence the `--allow-*` flags on B/C (unneeded on npm ≤ 11). Alternatively download the tgz and install the local file: `npm i -g ./codex-ocfree-0.3.0.tgz` (local files need no flags).
+> npm ≥ 12 disables git sources and remote tarballs by default (`allow-git` / `allow-remote` = `none`, supply-chain hardening) — hence the `--allow-*` flags on B/C (unneeded on npm ≤ 11). Alternatively download the tgz and install the local file: `npm i -g ./codex-ocfree-0.3.1.tgz` (local files need no flags).
 
 Day to day you only need `codex-ocfree up` and `codex --profile opencode`. The upstream free pool changes over time — run `codex-ocfree refresh` occasionally to update the working-model list. For other agents, use the helper console:
 
@@ -69,8 +69,8 @@ codex-ocfree run [-p <p>] <args>  start bridge (as needed) + set CODEX_HOME + ru
 codex-ocfree shell [zsh|bash]     print the codex() wrapper snippet (defaults to $SHELL)
 
 codex-ocfree helper               interactive wizard (TTY; equals list otherwise)
-codex-ocfree helper list [--json] detect 13 agents: installed / configured / config path / protocol
-codex-ocfree helper configure <a> point at the bridge: codex claude-code dsh opencode (trae/zcode print GUI cards)
+codex-ocfree helper list [--json] detect 14 agents: installed / configured / config path / protocol
+codex-ocfree helper configure <a> point at the bridge: codex claude-code dsh opencode traework-cn (trae/zcode print GUI cards)
 codex-ocfree helper reset <a>     remove only what we injected, restore prior values
 ```
 
@@ -82,11 +82,12 @@ codex-ocfree helper reset <a>     remove only what we injected, restore prior va
 | **claude-code** | full, surgical | touches exactly three `env` keys in `~/.claude/settings.json` (`ANTHROPIC_BASE_URL` → local bridge, `ANTHROPIC_AUTH_TOKEN` placeholder, `ANTHROPIC_MODEL` → current free slug); everything else untouched |
 | **dsh** | full | injects `llm-pi-ai.providers.ocfree` + `agent-default-model` into `~/.dsh/cordis.patch.yml` (loader patch **array** — the format dsh 0.2.0-rc.2 actually reads; `settings.yaml` is ignored by the boot path) and writes the `OCFREE_API_KEY` credential to `~/.dsh/.env` |
 | **opencode** | full | adds `provider.ocfree` to `~/.config/opencode/opencode.json` (your default model is **not** changed; pick it via `/models` or `-m ocfree/<id>`) |
+| **traework-cn** (TraeCode CLI) | full | merges two protocol entries into the `models:` list of `~/.trae/trae_cli.yaml`: `ocfree-local` (`open_ai`, `base_url` with `/v1`) + `ocfree-local-claude` (`claude`, `base_url` at root); existing entries are replaced in place (port/model changes never duplicate entries) and `reset` removes only ours. **Chat requires a logged-in TRAE account** (login & plan gating is TRAE's own); the TraeWork desktop app is GUI-only → printed as a guide card |
 | **trae** | guide card | config lives in encrypted `state.vscdb` → GUI-only; prints URL/key/model steps |
 | **zcode** | guide card | schema drifts across versions and isn't installed locally → prints a paste-ready JSON snippet, never writes files |
 | 7 more (cursor, grok, …) | detect-only | reported by `helper list`; `configure` refuses them |
 
-Safety: every configure snapshots the original file into `~/.codex-ocfree/backups/` and records per-key prior values in `helper-state.json`; `reset` removes only the injected entries and restores those values; re-running `configure` is idempotent. Verified in isolated homes: full claude-code change→restore→idempotent cycles, three dsh file shapes, opencode/codex inject+restore, and that guide cards never touch the filesystem.
+Safety: every configure snapshots the original file into `~/.codex-ocfree/backups/` and records per-key prior values in `helper-state.json`; `reset` removes only the injected entries and restores those values; re-running `configure` is idempotent. Verified in isolated homes: full claude-code change→restore→idempotent cycles, three dsh file shapes, opencode/codex inject+restore, the full traework-cn cycle (real `trae-cli models`/`doctor` acceptance, live chat over both protocols through the bridge, in-place replace on port/model change, legacy 1.0 path preference, merge + surgical reset), and that guide cards never touch the filesystem.
 
 ### Daily quota display
 

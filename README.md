@@ -36,7 +36,7 @@ https://opencode.ai/inference/openai/v1/chat/completions   ← OpenCode Zen 免�
 |---|---|
 | **协议桥** | Codex 只认 `wire_api="responses"`，免费模型只认 `/chat/completions` — 本地无依赖桥做双向转换（Node ≥22，零第三方包） |
 | **三协议端点** | 同一端口同时说三种协议：`/v1/responses`（Codex）、`/v1/chat/completions`（OpenAI 兼容）、`/v1/messages` + `count_tokens`（Anthropic / Claude Code），`/v1/models` 双格式 — 任何 OpenAI / Anthropic 兼容客户端都能直连 |
-| **helper 中控台** | `codex-ocfree helper configure/reset <agent>` 一键把 codex / claude-code / dsh / opencode 指向本地桥（原值逐键备份、可还原）；trae / zcode 打印 GUI 指引卡；其余 7 个 agent 仅检测 |
+| **helper 中控台** | `codex-ocfree helper configure/reset <agent>` 一键把 codex / claude-code / dsh / opencode / traework-cn 指向本地桥（原值逐键备份、可还原）；trae / zcode 打印 GUI 指引卡；其余 7 个 agent 仅检测 |
 | **会话隔离** | `codex --profile X` 默认与裸 `codex` 共享全部会话/历史；codex-ocfree 给每个 profile 一份独立 `CODEX_HOME`（`~/.codex.d/X/`），配置和 skills 仍 symlink 共享 |
 | **模型切换** | `codex-ocfree models` 终端 TUI 一键切默认模型；`codex-ocfree refresh` 探测上游真实可用性，只列能用的 |
 | **额度显示** | `codex-ocfree quota` 本地统计今日/5h 窗口用量与触顶记录；对话里直接问模型“额度还剩多少”也能答（所有端点的请求都记账） |
@@ -60,7 +60,7 @@ https://opencode.ai/inference/openai/v1/chat/completions   ← OpenCode Zen 免�
 git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && bash install.sh
 
 # B. Release 离线包：不 clone、不经 npm registry（tgz 是 release 附件）
-npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.0/codex-ocfree-0.3.0.tgz && codex-ocfree setup
+npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.1/codex-ocfree-0.3.1.tgz && codex-ocfree setup
 
 # C. npm 直装（走 GitHub 源）
 npm i -g --allow-git=all git+https://github.com/LiuSantu123/codex-ocfree.git && codex-ocfree setup
@@ -72,7 +72,7 @@ codex --profile opencode      # 开聊；会话历史与裸 codex 完全隔离
 
 `setup` = 写 profile + 探测可用模型（首次约 1 分钟，`--no-probe` 跳过）+ 生成模型目录 + 会话隔离 + shell 包装；方式 A 的 `install.sh` 已包含 setup。无 npm 的机器上 `install.sh` 自动降级为 `~/.local/bin` 软链。
 
-> npm ≥ 12 出于供应链安全默认 `allow-git=none` / `allow-remote=none`（禁用 git 源与远程 tarball 直装），所以 B/C 需要 `--allow-*` 放行（npm ≤ 11 可省略）。也可以把 tgz 下载到本地后安装：`npm i -g ./codex-ocfree-0.3.0.tgz`（本地文件不触发白名单）。
+> npm ≥ 12 出于供应链安全默认 `allow-git=none` / `allow-remote=none`（禁用 git 源与远程 tarball 直装），所以 B/C 需要 `--allow-*` 放行（npm ≤ 11 可省略）。也可以把 tgz 下载到本地后安装：`npm i -g ./codex-ocfree-0.3.1.tgz`（本地文件不触发白名单）。
 
 之后日常只需要两条命令：`codex-ocfree up`（桥常驻即可）和 `codex --profile opencode`。上游免费池会变，隔段时间跑一次 `codex-ocfree refresh` 更新可用模型。**其它 Agent（Claude Code / dsh / opencode…）用 helper 接入**：
 
@@ -106,8 +106,8 @@ codex-ocfree run [-p <p>] <codex args> 起桥(按需) + 设 CODEX_HOME + 代跑 
 codex-ocfree shell [zsh|bash]          打印 codex() 包装片段（默认按 $SHELL，自己贴到对应 rc）
 
 codex-ocfree helper                    交互向导（TTY；非 TTY 等价 list）
-codex-ocfree helper list [--json]      检测 13 个 agent：安装/配置状态/配置路径/协议
-codex-ocfree helper configure <agent>   指向本地桥：codex claude-code dsh opencode（trae/zcode 打印 GUI 指引卡）
+codex-ocfree helper list [--json]      检测 14 个 agent：安装/配置状态/配置路径/协议
+codex-ocfree helper configure <agent>   指向本地桥：codex claude-code dsh opencode traework-cn（trae/zcode 打印 GUI 指引卡）
 codex-ocfree helper reset <agent>       只移除注入项、还原原值（其余设置保留）
 ```
 
@@ -145,6 +145,7 @@ codex-ocfree run -p opencode exec --skip-git-repo-check "..."   # 一条命令�
 | **claude-code** | 自动（外科手术式） | `~/.claude/settings.json` 只动三把 `env` 键：`ANTHROPIC_BASE_URL`→本地桥、`ANTHROPIC_AUTH_TOKEN`→占位、`ANTHROPIC_MODEL`→当前免费模型；**其余键原样保留** |
 | **dsh**（DeepSeek Harness） | 自动 | `~/.dsh/cordis.patch.yml`（loader patch **数组**）注入 `llm-pi-ai.providers.ocfree` + `agent-default-model`；凭据写 `~/.dsh/.env` 的 `OCFREE_API_KEY`（实测 `settings.yaml` 不被启动路径读取，故写 patch 文件） |
 | **opencode** | 自动 | `~/.config/opencode/opencode.json` 注入 `provider.ocfree`（**不改你的默认模型**，用 `/models` 或 `-m ocfree/<id>` 选） |
+| **traework-cn**（TraeCode CLI） | 自动 | `~/.trae/trae_cli.yaml` 的 `models:` 列表合并两条协议条目：`ocfree-local`（`open_ai`，`base_url` 带 `/v1`）+ `ocfree-local-claude`（`claude`，`base_url` 根路径）；已存在则原地替换（换端口/换模型不产生重复条目），reset 只删我们的条目。**chat 需先登录 TRAE 账号**（登录与套餐校验是 TRAE 自家门槛）；TraeWork 桌面版仅 GUI，配置打印到指引卡 |
 | **trae** | 仅指引卡 | 配置存在加密 `state.vscdb`，只能 GUI 填 — 打印带 URL / key / model 的步骤卡 |
 | **zcode** | 仅指引卡 | 配置 schema 随版本漂移且本机无安装 — 打印可粘贴 JSON 片段（`kind:"anthropic"`、`baseURL` 不带 `/v1`），**不代写文件** |
 | workbuddy / cursor / grok / kimi-code / openclaw / hermes / pi | 仅检测 | `helper list` 报告安装与配置状态（未适配，configure 会拒绝） |
@@ -153,7 +154,7 @@ codex-ocfree run -p opencode exec --skip-git-repo-check "..."   # 一条命令�
 
 - 每次 configure **先把原文件整份快照**进 `~/.codex-ocfree/backups/`，并把**逐键原值**记进 `helper-state.json`；
 - `helper reset <agent>` 只删注入项（marker 段 / 逐键），你的其它设置原样保留、原值逐键还原；重复 configure **幂等**（不会用桥的值覆盖原值记录）；
-- 实测覆盖：claude-code 隔离 HOME 全流程（改 → 还原 → 幂等 → 二次 reset 无副作用）、dsh 三种文件形态（全新 / 已有同名 entry / 已有自己的默认模型）、opencode 与 codex 的注入与还原、trae/zcode 指引卡只打印不落盘。
+- 实测覆盖：claude-code 隔离 HOME 全流程（改 → 还原 → 幂等 → 二次 reset 无副作用）、dsh 三种文件形态（全新 / 已有同名 entry / 已有自己的默认模型）、opencode 与 codex 的注入与还原、traework-cn 全流程（真 `trae-cli models`/`doctor` 验收 + 双协议经桥 live chat、换端口/换模型原地替换、legacy 1.0 路径偏好、合并与外科 reset）、trae/zcode 指引卡只打印不落盘。
 
 ### Claude Code：切换与还原（按需执行）
 
@@ -253,7 +254,7 @@ codex-ocfree/
 │   ├── bridge.mjs          协议桥（responses / chat / anthropic 三端点 → chat/completions，零依赖）
 │   ├── gate.mjs            网关门禁的工具注入与别名映射（read/shell 按客户端工具克隆）
 │   ├── anthropic.mjs       Anthropic Messages ⇄ chat 双向转换（SSE 事件流、非流式聚合）
-│   ├── helper.mjs          helper 中控台（13 agent 检测 / configure / reset / 指引卡）
+│   ├── helper.mjs          helper 中控台（14 agent 检测 / configure / reset / 指引卡）
 │   ├── bridgectl.mjs       桥控制（start/stop/health）
 │   ├── profiles.mjs        CODEX_HOME 隔离 + bash/zsh codex() 包装
 │   ├── probe.mjs           上游可用性探测

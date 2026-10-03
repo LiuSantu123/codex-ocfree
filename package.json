@@ -1,6 +1,6 @@
 {
   "name": "codex-ocfree",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "OpenCode free models for Codex CLI and other agents: multi-protocol local bridge (responses/chat/anthropic), per-profile session isolation, helper console, TUI model switching",
   "type": "module",
   "license": "PolyForm-Noncommercial-1.0.0",

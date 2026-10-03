@@ -6,12 +6,13 @@
  *   helper configure <agent>   point the agent at the local bridge
  *   helper reset <agent>       remove what we injected, keep everything else
  *
- * Configure support (v0.3.0):
+ * Configure support (v0.3.0; traework-cn since v0.3.1):
  *   codex        ~/.codex/<profile>.config.toml + isolation home  (full)
  *   claude-code  ~/.claude/settings.json env keys                 (full, surgical)
  *   dsh          ~/.dsh/cordis.patch.yml loader patch array       (full, marker'd)
  *   opencode     ~/.config/opencode/opencode.json provider.ocfree (full)
  *   trae         GUI-only config (encrypted state.vscdb)          (guide card)
+ *   traework-cn  TraeCode CLI ~/.trae/trae_cli.yaml models[]       (full, merged)
  *   zcode        GUI-managed, version-drifting schema             (guide card)
  *   others       detect-only
  *
@@ -59,6 +60,17 @@ const ZCODE_V2 = path.join(HOME, '.zcode', 'v2', 'config.json');
 const DSH_MARK_B = '# >>> codex-ocfree: ocfree provider >>>';
 const DSH_MARK_E = '# <<< codex-ocfree: ocfree provider <<<';
 const OC_KEY = 'ocfree-local'; // dummy credential — the bridge never checks auth
+
+/* TraeCode CLI (traework CN) — verified empirically on trae-cli v0.120.52:
+ *   - canonical global config: ~/.trae/trae_cli.yaml; the CLI auto-migrates the
+ *     legacy 1.0 path (XDG/AppSupport) into it and leaves a compat symlink.
+ *   - models:[] entries: {name, open_ai:{base_url,api_key,model}} and/or
+ *     {claude:{base_url,model,api_key}} (docs.trae.cn/cli_model schema;
+ *     acceptance checked with `trae-cli models --json` + `trae-cli doctor`).
+ *   - dispatch requires a logged-in TRAE account (their entitlement gate) —
+ *     helper only writes the model entries, login stays with the user.       */
+const TRAE_CLI_YAML = path.join(TRAE_DIR, 'trae_cli.yaml'); // canonical (v0.120+)
+const TRAE_OUR_NAMES = [OC_KEY, `${OC_KEY}-claude`];
 
 /* ----------------------------------------------------------------- utils -- */
 
@@ -499,6 +511,219 @@ function resetOpencode() {
   return { ok: true, steps };
 }
 
+/* ------------------------------------------------------- traework CN (traecli) */
+
+function traeCliLegacyYaml() {
+  if (process.platform === 'darwin') return path.join(HOME, 'Library', 'Application Support', 'trae_cli', 'trae_cli.yaml');
+  if (process.platform === 'win32') return path.join(process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming'), 'trae_cli', 'trae_cli.yaml');
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'trae_cli', 'trae_cli.yaml');
+}
+
+/** prefer the canonical file; only a real (non-symlink) legacy file counts as live */
+function traeCliTarget() {
+  const legacy = traeCliLegacyYaml();
+  try {
+    if (fs.existsSync(legacy) && !fs.lstatSync(legacy).isSymbolicLink() && !fs.existsSync(TRAE_CLI_YAML)) return legacy;
+  } catch { /* fall through */ }
+  return TRAE_CLI_YAML;
+}
+
+function traeCliBlock(model) {
+  return [
+    `- name: ${OC_KEY}`,
+    '  open_ai:',
+    `    base_url: ${BRIDGE_BASE}/v1`,
+    `    api_key: ${OC_KEY}`,
+    `    model: ${model}`,
+    `- name: ${OC_KEY}-claude`,
+    '  claude:',
+    `    base_url: ${BRIDGE_BASE}`,
+    `    model: ${model}`,
+    `    api_key: ${OC_KEY}`,
+  ];
+}
+
+function traeEntryName(line) {
+  const m = String(line).match(/^\s*-\s+name:\s*(.*?)\s*$/);
+  if (!m) return null;
+  return m[1].replace(/^["'](.*)["']$/, '$1');
+}
+
+function traeHasOurEntries(text) {
+  return TRAE_OUR_NAMES.every((n) => new RegExp(`^\\s*-\\s+name:\\s*["']?${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?\\s*$`, 'm').test(text))
+    && text.includes(BRIDGE_BASE);
+}
+
+function traeHasAnyOurEntry(text) {
+  return text.split('\n').some((l) => {
+    const n = traeEntryName(l);
+    return n !== null && TRAE_OUR_NAMES.includes(n);
+  });
+}
+
+/** insert the ocfree entries under a top-level `models:` key (create the key if absent) */
+function traeInsertModels(text, block) {
+  const lines = text.split('\n');
+  let mi = lines.findIndex((l) => /^models:[ \t]*(#.*)?$/.test(l));
+  if (mi < 0) {
+    // `models: []` flow style → rewrite as a block list
+    mi = lines.findIndex((l) => /^models:\s*\[\s*\]\s*$/.test(l));
+    if (mi >= 0) {
+      lines[mi] = 'models:';
+      lines.splice(mi + 1, 0, ...block.map((l) => '  ' + l));
+      return lines.join('\n');
+    }
+    const t = text.replace(/\s*$/, '');
+    return (t ? t + '\n' : '') + 'models:\n' + block.map((l) => '  ' + l).join('\n') + '\n';
+  }
+  let indent = 2;
+  for (let i = mi + 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.trim() && /^\S/.test(l)) break; // next top-level key before any entry
+    const m = l.match(/^( *)-\s/);
+    if (m) { indent = m[1].length; break; }
+  }
+  lines.splice(mi + 1, 0, ...block.map((l) => ' '.repeat(indent) + l));
+  return lines.join('\n');
+}
+
+/** remove exactly our two entries; keep every other line untouched */
+function traeRemoveOurEntries(text) {
+  const lines = text.split('\n');
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const name = traeEntryName(lines[i]);
+    if (name !== null && TRAE_OUR_NAMES.includes(name)) {
+      const indent = lines[i].match(/^ */)[0].length;
+      i++;
+      while (i < lines.length) {
+        const l2 = lines[i];
+        if (!l2.trim()) break; // blank line ends the block (left in place)
+        const ind2 = l2.match(/^ */)[0].length;
+        if (ind2 < indent || (ind2 === indent && !/^\s*-\s/.test(l2))) break; // top-level / dedent
+        if (ind2 === indent && /^\s*-\s/.test(l2)) break; // sibling entry
+        i++;
+      }
+      continue;
+    }
+    out.push(lines[i]);
+    i++;
+  }
+  let res = out.join('\n');
+  // an emptied `models:` key would parse as null → normalize to []
+  if (/^models:\s*$/m.test(res) && !/^\s+-\s/m.test(res.replace(/^models:\s*$/m, ''))) {
+    res = res.replace(/^models:\s*$/m, 'models: []');
+  }
+  return res;
+}
+
+function configureTraeworkCn() {
+  const model = currentModel();
+  if (!model) return { ok: false, steps: [], notes: ['模型目录为空 — 先跑 codex-ocfree refresh'] };
+  const file = traeCliTarget();
+  const orig = readText(file);
+  if (/^models:\s*\[[^\]\s]|^models:\s*\[\s*$/m.test(orig)) {
+    // non-empty flow-style `models:` — a naive insert would append a second
+    // top-level `models:` key and silently shadow the user's entries.
+    return {
+      ok: false,
+      steps: [],
+      notes: [
+        '检测到 models: 使用 flow 写法，无法安全合并 — 请手工在 models 列表里追加：',
+        ...traeCliBlock(model).map((l) => '  ' + l),
+        `配置文件: ${file}`,
+      ],
+    };
+  }
+  // remove-then-insert: replaces stale entries (old port / old model slug)
+  // instead of appending duplicates; byte-identical result → keep as-is.
+  const base = traeHasAnyOurEntry(orig) ? traeRemoveOurEntries(orig) : orig;
+  let out = traeInsertModels(base, traeCliBlock(model));
+  if (orig.endsWith('\n') && !out.endsWith('\n')) out += '\n';
+  if (out === orig) {
+    const sk = readHState();
+    if (!sk['traework-cn']) {
+      sk['traework-cn'] = { at: Date.now(), file, backup: null, existed: true };
+      writeHState(sk);
+    }
+    return {
+      ok: true,
+      steps: ['已配置，保持不动（trae_cli.yaml 已含 ocfree 双协议条目）'],
+      notes: traeNotes(file),
+    };
+  }
+  const existed = fs.existsSync(file);
+  const b = existed ? backup(file) : null;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, out);
+  const st = readHState();
+  st['traework-cn'] = { at: Date.now(), file, backup: b, existed };
+  writeHState(st);
+  return {
+    ok: true,
+    steps: [
+      `写入 ${file}（models += ocfree / ocfree-claude, model=${model}）`,
+      ...(b ? [`原文件备份: ${b}`] : [`新建: ${file}`]),
+    ],
+    notes: traeNotes(file, { configured: true }),
+  };
+}
+
+function traeNotes(file, { configured = false } = {}) {
+  const model = currentModel() || '<model>';
+  const inst = hasCmd('traecli') || hasCmd('trae-cli');
+  return [
+    ...(configured ? ['重启 traecli 后输入 /model 选 ocfree-local（OpenAI 协议）或 ocfree-local-claude（Anthropic 协议）'] : []),
+    ...(inst ? [] : ['未检测到 traecli/trae-cli 命令 — 配置已就绪，装好 TraeCode CLI 即可用']),
+    'TraeCode CLI 要求先登录 TRAE 账号（登录/套餐校验是 TRAE 自己的门槛，helper 不代登录）',
+    '',
+    'TraeWork 桌面版（GUI，仅桌面版支持自定义模型）：',
+    `  设置 → 模型 → 添加模型 → 自定义配置`,
+    `    API 格式 OpenAI Chat Completions: 自定义请求地址 ${BRIDGE_BASE}/v1`,
+    `    API 格式 Anthropic Messages:      自定义请求地址 ${BRIDGE_BASE}`,
+    `    模型 ID ${model}   API 密钥 ${OC_KEY}`,
+    '',
+    '桥需在运行: codex-ocfree up',
+    `配置文件: ${file}`,
+  ];
+}
+
+function resetTraeworkCn() {
+  const s0 = readHState();
+  const st = s0['traework-cn'];
+  let file = (st && st.file) || traeCliTarget();
+  try {
+    // CLI 0.120+ migrates the legacy file into ~/.trae and leaves a symlink;
+    // operate on the real path so a created-by-us file is fully removed.
+    if (fs.existsSync(file)) file = fs.realpathSync(file);
+  } catch { /* keep logical path */ }
+  const txt = readText(file);
+  const steps = [];
+  if (!txt.trim()) {
+    if (st) { delete s0['traework-cn']; writeHState(s0); }
+    return { ok: true, steps: ['无配置文件 — 无需还原'] };
+  }
+  if (!traeHasAnyOurEntry(txt)) {
+    if (st) { delete s0['traework-cn']; writeHState(s0); }
+    return { ok: true, steps: ['无 ocfree 条目 — 未改动'] };
+  }
+  const b = backup(file);
+  const out = traeRemoveOurEntries(txt);
+  const bare = out.replace(/^models:\s*\[\s*\]\s*$/m, '').replace(/\s+/g, '');
+  if (!(st && st.existed) && !bare) {
+    fs.unlinkSync(file);
+    steps.push(`文件由 ocfree 创建，已删除: ${file}`);
+  } else {
+    fs.writeFileSync(file, out);
+    steps.push(`已移除 ocfree 条目: ${file}${b ? `（备份: ${b}）` : ''}`);
+  }
+  if (st && st.backup) steps.push(`历史备份: ${st.backup}`);
+  delete s0['traework-cn'];
+  writeHState(s0);
+  return { ok: true, steps };
+}
+
 /* ---------------------------------------------------- guide cards (trae/zcode) -- */
 
 function guideCard(name) {
@@ -645,6 +870,23 @@ export const AGENTS = [
     support: 'guide',
     detect: () => ({ installed: hasCmd('trae') || fs.existsSync(TRAE_DIR), configured: false, path: '(GUI: 设置→模型)' }),
     guide: () => guideCard('trae'),
+  },
+  {
+    name: 'traework-cn',
+    display: 'TraeWork CN',
+    proto: 'openai-chat | anthropic',
+    support: 'configure',
+    detect: () => {
+      const file = traeCliTarget();
+      const txt = readText(file);
+      return {
+        installed: hasCmd('traecli') || hasCmd('trae-cli') || fs.existsSync(TRAE_CLI_YAML) || fs.existsSync(traeCliLegacyYaml()),
+        configured: traeHasOurEntries(txt),
+        path: file,
+      };
+    },
+    configure: configureTraeworkCn,
+    reset: resetTraeworkCn,
   },
   {
     name: 'zcode',
