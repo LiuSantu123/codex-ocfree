@@ -36,6 +36,7 @@ import { init, listHomes, codexHomeFor, wrapperSnippet, rcPath, detectShell } fr
 import { select } from './tui.mjs';
 import { doctor } from './doctor.mjs';
 import { cmdQuota, quotaBrief } from './quota.mjs';
+import { helperList, helperConfigure, helperReset, helperWizard } from './helper.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION = (() => {
@@ -47,7 +48,7 @@ const VERSION = (() => {
 })();
 
 const HELP = `
-${bold('codex-ocfree')} ${dim('v' + VERSION)} — OpenCode 免费模型接入 Codex CLI（协议桥 + profile 会话隔离 + 模型切换）
+${bold('codex-ocfree')} ${dim('v' + VERSION)} — OpenCode 免费模型接入主流 Agent（协议桥三端点 + profile 隔离 + 模型切换 + helper 中控台）
 
 ${bold('安装 / 首次使用')}
   ${cyan('bash install.sh')}                     一键安装：clone + 链接命令 + setup（仓库根目录）
@@ -55,10 +56,17 @@ ${bold('安装 / 首次使用')}
   ${cyan('codex-ocfree init [profile]')}         只装会话隔离（~/.codex.d/<profile> + codex() 包装，按 \$SHELL 选 bash/zsh，--shell 可覆盖）
   ${cyan('codex-ocfree doctor')}                 体检：运行时 / 桥 / 配置 / 隔离 / shell 集成
 
-${bold('协议桥（responses <-> chat/completions）')}
+${bold('协议桥（三协议 -> chat/completions）')}
+  ${dim('端点: /v1/responses (Codex) · /v1/chat/completions (OpenAI 兼容) · /v1/messages + count_tokens (Anthropic)')}
   ${cyan('codex-ocfree up')}                     起桥（后台，pid/日志在 ~/.codex-ocfree/）
   ${cyan('codex-ocfree down|status')}            停桥 / 查状态
   ${cyan('codex-ocfree serve')}                  前台跑桥（看日志用）
+
+${bold('多 agent 接入（helper 中控台，对标 arkcli helper）')}
+  ${cyan('codex-ocfree helper')}                  交互向导（TTY；非 TTY 等价 list）
+  ${cyan('codex-ocfree helper list [--json]')}    检测主流 agent：安装/配置状态/配置路径/协议
+  ${cyan('codex-ocfree helper configure <a>')}    指向本地桥：codex claude-code dsh opencode（trae/zcode 打印 GUI 指引卡）
+  ${cyan('codex-ocfree helper reset <a>')}        还原注入的配置（原值有备份，保留你的其它设置）
 
 ${bold('模型')}
   ${cyan('codex-ocfree models')}                 TUI 选择并设为默认模型
@@ -312,6 +320,34 @@ ${bold('启动')}
   return 0;
 }
 
+async function cmdHelper(rest, opts) {
+  const sub = rest[0];
+  const flags = rest.slice(1).filter((a) => a.startsWith('--'));
+  const args = rest.slice(1).filter((a) => !a.startsWith('--'));
+  const json = flags.includes('--json') || opts.print;
+  if (!sub || sub === 'wizard') {
+    if (process.stdout.isTTY) return await helperWizard();
+    return await helperList({ json });
+  }
+  if (sub === 'list' || sub === 'ls') return await helperList({ json });
+  if (sub === 'configure' || sub === 'config' || sub === 'add') {
+    if (!args[0]) {
+      console.error('用法: codex-ocfree helper configure <agent>   (agent 见 helper list)');
+      return 1;
+    }
+    return await helperConfigure(args[0], opts);
+  }
+  if (sub === 'reset' || sub === 'remove') {
+    if (!args[0]) {
+      console.error('用法: codex-ocfree helper reset <agent>');
+      return 1;
+    }
+    return await helperReset(args[0], opts);
+  }
+  console.error(`未知子命令: ${sub}（可用: list, configure <agent>, reset <agent>）`);
+  return 1;
+}
+
 async function cmdRun(args, profile = null) {
   // the global parser consumed the profile flag; hand it back to codex so the
   // $CODEX_HOME/<name>.config.toml layer is actually applied
@@ -414,6 +450,8 @@ export async function main(argv = process.argv.slice(2)) {
       return cmdUse(rest, opts);
     case 'profile':
       return cmdProfile(rest);
+    case 'helper':
+      return await cmdHelper(rest, opts);
     case 'run':
       return await cmdRun(rest, opts.profile);
     case 'shell': {

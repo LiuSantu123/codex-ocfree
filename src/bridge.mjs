@@ -2,8 +2,12 @@
 /**
  * codex-ocfree protocol bridge
  *
- * Codex (OpenAI Responses API, wire_api="responses")
- *        <-->  local HTTP bridge  <-->  OpenCode Zen free models (chat/completions)
+ * Local clients                      bridge routes               upstream
+ *   Codex  -> /v1/responses     \
+ *   OpenAI-compatible agents      |-- (gate inject) --> chat/completions
+ *     (dsh/opencode/trae)       -> /v1/chat/completions   <-->  OpenCode Zen
+ *   Anthropic agents              /                          free models
+ *     (Claude Code/ZCode)       -> /v1/messages (+count_tokens)
  *
  * Upstream gate requirements (verified empirically 2026-09):
  *   - URL      : https://opencode.ai/inference/openai/v1/chat/completions
@@ -31,6 +35,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { recordUsage, quotaLine } from './usage.mjs';
+import { injectGateTools, mapBack } from './gate.mjs';
+import {
+  anthropicToChat,
+  makeAnthropicConverter,
+  anthropicResult,
+  countTokens,
+  toAnthropicError,
+} from './anthropic.mjs';
+import { getModel, readCatalog } from './config.mjs';
 
 const STATE_DIR = process.env.OC2C_STATE || path.join(os.homedir(), '.codex-ocfree');
 fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -56,6 +69,29 @@ const log = (...a) => console.error(`[oc2c ${new Date().toISOString()}]`, ...a);
 function newSessionId() {
   // "ses_" + 12 lowercase hex + 14 alphanumeric (verified gate format)
   return 'ses_' + randomBytes(6).toString('hex') + rand(14);
+}
+
+/**
+ * Model routing for non-Codex clients: Codex always sends a free slug, but
+ * Claude Code sends "sonnet"/"claude-*" and other agents send whatever id we
+ * configured. Known free slugs pass through; anything else falls back to the
+ * current default (profile "opencode"). Catalog is re-read at most every 5s.
+ */
+let modelCache = { ts: 0, slugs: null, fallback: null };
+function resolveModel(name) {
+  const clean = String(name || '').trim().replace(/^opencode\//, '');
+  const now = Date.now();
+  if (!modelCache.slugs || now - modelCache.ts > 5000) {
+    const cat = readCatalog();
+    const slugs = new Set(cat.map((m) => m.slug).filter(Boolean));
+    modelCache = { ts: now, slugs, fallback: getModel('opencode') || (cat[0] && cat[0].slug) || null };
+  }
+  const { slugs, fallback } = modelCache;
+  if (slugs.size) {
+    if (clean && slugs.has(clean)) return clean;
+    return fallback || clean || 'unknown';
+  }
+  return clean || fallback || 'unknown';
 }
 
 /* ------------------------------------------------------------------ auth -- */
@@ -444,6 +480,89 @@ async function postChat(body, allowAuthRetry = true) {
   return resp;
 }
 
+/** upstream error body -> { type, message } for usage records */
+function parseUpstreamErr(txt) {
+  try {
+    const j = JSON.parse(txt);
+    const e = j && (j.error || j);
+    if (e && (e.type || e.message)) return { type: String(e.type || 'error'), message: String(e.message || '').slice(0, 200) };
+  } catch { /* non-JSON error body */ }
+  return null;
+}
+
+/** read an SSE body, calling onObj for each JSON `data:` payload (until [DONE]) */
+async function readSse(upstream, onObj) {
+  const decoder = new TextDecoder();
+  let buf = '', done = false;
+  for await (const chunk of upstream.body) {
+    buf += decoder.decode(chunk, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).replace(/\r$/, '');
+      buf = buf.slice(nl + 1);
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (data === '[DONE]') { done = true; break; }
+      let obj;
+      try { obj = JSON.parse(data); } catch { continue; }
+      onObj(obj);
+    }
+    if (done) break;
+  }
+  return done;
+}
+
+/** SSE write guard — never throw on a closed client socket */
+function sseWriter(res) {
+  return (payload) => {
+    if (res.writableEnded || res.destroyed) return;
+    try { res.write(payload); } catch { /* client gone */ }
+  };
+}
+
+/** append the quota note to the first system/developer message (or prepend one) */
+function noteSystem(messages, note) {
+  if (!note) return;
+  const i = messages.findIndex((m) => m && (m.role === 'system' || m.role === 'developer'));
+  if (i >= 0) {
+    const c = messages[i].content;
+    const txt = typeof c === 'string' ? c : Array.isArray(c) ? c.map((p) => (p && typeof p.text === 'string' ? p.text : '')).join('') : '';
+    messages[i].content = txt + (txt ? '\n\n' : '') + note;
+  } else {
+    messages.unshift({ role: 'system', content: note });
+  }
+}
+
+/* shared chat-chunk aggregator (non-streaming chat + anthropic replies) */
+function newAgg() {
+  return { content: '', reasoning: '', toolCalls: new Map(), finish: null, usage: null };
+}
+function consumeAgg(agg, obj) {
+  if (obj.usage) agg.usage = obj.usage;
+  const ch = obj.choices && obj.choices[0];
+  if (!ch) return;
+  const d = ch.delta || {};
+  if (typeof d.content === 'string') agg.content += d.content;
+  if (typeof d.reasoning === 'string') agg.reasoning += d.reasoning;
+  if (typeof d.reasoning_content === 'string') agg.reasoning += d.reasoning_content;
+  if (Array.isArray(d.tool_calls)) {
+    for (const tc of d.tool_calls) {
+      if (!tc) continue;
+      const ci = typeof tc.index === 'number' ? tc.index : 0;
+      let rec = agg.toolCalls.get(ci);
+      if (!rec) {
+        rec = { id: tc.id || 'call_' + rid(), name: (tc.function && tc.function.name) || '', args: '' };
+        agg.toolCalls.set(ci, rec);
+      }
+      if (tc.id) rec.id = tc.id;
+      if (tc.function && tc.function.name && !rec.name) rec.name = tc.function.name;
+      if (tc.function && typeof tc.function.arguments === 'string') rec.args += tc.function.arguments;
+    }
+  }
+  if (ch.finish_reason) agg.finish = ch.finish_reason;
+}
+const aggEmpty = (agg) => !agg.usage && !agg.content && !agg.reasoning && agg.toolCalls.size === 0;
+
 async function handleResponses(req, res) {
   let r;
   try {
@@ -588,10 +707,284 @@ function handleModels(res) {
   try {
     const cat = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf8'));
     models = (cat.models || []).map((m) => ({
-      id: m.slug, object: 'model', created: 0, owned_by: 'opencode',
+      // dual shape: OpenAI (object/owner) + Anthropic (type/display_name)
+      id: m.slug,
+      type: 'model',
+      object: 'model',
+      display_name: m.display_name || m.slug,
+      created: 0,
+      owned_by: 'opencode',
+      owner: 'opencode',
     }));
   } catch { /* no catalog */ }
-  jsonReply(res, 200, { object: 'list', data: models });
+  jsonReply(res, 200, { type: 'list', object: 'list', data: models });
+}
+
+/* ---------------------------------------- POST /v1/chat/completions (openai) -- */
+
+async function handleChat(req, res) {
+  let r;
+  try {
+    r = JSON.parse((await readBody(req)) || '{}');
+  } catch (e) {
+    return jsonReply(res, 400, { error: { message: 'invalid JSON: ' + e.message, type: 'invalid_request_error' } });
+  }
+
+  const clientModel = String(r.model || '');
+  const tools = (Array.isArray(r.tools) ? r.tools : []).filter(
+    (t) => t && t.function && typeof t.function.name === 'string' && (!t.type || t.type === 'function'),
+  );
+  const aliases = injectGateTools(tools);
+  const messages = Array.isArray(r.messages) ? r.messages.map((m) => ({ ...m })) : [];
+  noteSystem(messages, quotaLine());
+
+  const chatBody = { model: resolveModel(clientModel), messages, tools, stream: true, stream_options: { include_usage: true } };
+  if (r.temperature != null) chatBody.temperature = r.temperature;
+  if (r.top_p != null) chatBody.top_p = r.top_p;
+  if (r.max_tokens != null) chatBody.max_tokens = r.max_tokens;
+  if (r.max_completion_tokens != null) chatBody.max_completion_tokens = r.max_completion_tokens;
+  if (r.stop != null) chatBody.stop = r.stop;
+  if (r.tool_choice !== undefined) chatBody.tool_choice = r.tool_choice;
+  if (r.parallel_tool_calls !== undefined) chatBody.parallel_tool_calls = !!r.parallel_tool_calls;
+  if (r.response_format) chatBody.response_format = r.response_format;
+  if (r.seed != null) chatBody.seed = r.seed;
+
+  const wantsUsage = !!(r.stream_options && r.stream_options.include_usage);
+  const streaming = r.stream !== false;
+  log(`chat: model=${chatBody.model} client=${clientModel || '-'} msgs=${messages.length} tools=${tools.length} stream=${streaming}`);
+  const t0 = Date.now();
+  const recordChat = (status, usage, err) =>
+    recordUsage({ kind: 'chat', model: chatBody.model, status, ...(usage ? { usage } : {}), ...(err ? { err } : {}), ms: Date.now() - t0 });
+
+  let upstream;
+  try {
+    upstream = await postChat(chatBody);
+  } catch (e) {
+    return jsonReply(res, 502, { error: { message: 'bridge: upstream request failed: ' + e.message, type: 'upstream_error' } });
+  }
+  if (!upstream.ok) {
+    const txt = await upstream.text().catch(() => '');
+    log(`upstream ${upstream.status}: ${txt.slice(0, 300)}`);
+    recordChat(upstream.status, null, parseUpstreamErr(txt));
+    res.writeHead(upstream.status, { 'content-type': 'application/json' });
+    return res.end(txt || '{}');
+  }
+
+  if (!streaming) {
+    const agg = newAgg();
+    try {
+      await readSse(upstream, (obj) => consumeAgg(agg, obj));
+    } catch (e) {
+      recordChat('failed', null, { type: 'upstream_error', message: String(e.message).slice(0, 200) });
+      return jsonReply(res, 502, { error: { message: 'bridge: upstream stream error: ' + e.message, type: 'upstream_error' } });
+    }
+    if (aggEmpty(agg)) {
+      recordChat('failed', null, { type: 'empty_stream', message: 'upstream returned an empty stream' });
+      return jsonReply(res, 502, { error: { message: 'bridge: upstream returned an empty stream', type: 'upstream_error' } });
+    }
+    const usage = agg.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+    const toolCalls = [...agg.toolCalls.values()].map((rec) => ({
+      id: rec.id,
+      type: 'function',
+      function: { name: mapBack(rec.name, aliases), arguments: rec.args },
+    }));
+    const message = { role: 'assistant', content: agg.content };
+    if (agg.reasoning) message.reasoning_content = agg.reasoning;
+    if (toolCalls.length) message.tool_calls = toolCalls;
+    recordChat('completed', usage, null);
+    return jsonReply(res, 200, {
+      id: 'chatcmpl_' + rid(),
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: clientModel,
+      choices: [
+        {
+          index: 0,
+          message,
+          finish_reason: agg.finish || (toolCalls.length ? 'tool_calls' : 'stop'),
+          logprobs: null,
+        },
+      ],
+      usage,
+    });
+  }
+
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  const write = sseWriter(res);
+  const clientGone = new Promise((resolve) => req.on('close', resolve));
+  let lastUsage = null, sawAny = false, finished = false;
+  const finalize = (status, msg) => {
+    if (finished) return;
+    finished = true;
+    recordChat(
+      status,
+      status === 'completed' ? lastUsage : null,
+      msg ? { type: String(status), message: String(msg).slice(0, 200) } : null,
+    );
+    res.end();
+  };
+
+  try {
+    const bodyIter = (async () => {
+      await readSse(upstream, (obj) => {
+        if (obj.usage) lastUsage = obj.usage;
+        const ch = obj.choices && obj.choices[0];
+        if (ch) {
+          sawAny = true;
+          if (obj.model !== undefined) obj.model = clientModel || obj.model;
+          const d = ch.delta || {};
+          if (Array.isArray(d.tool_calls)) {
+            for (const tc of d.tool_calls) {
+              if (tc && tc.function && tc.function.name) tc.function.name = mapBack(tc.function.name, aliases);
+            }
+          }
+        } else if (obj.usage && !wantsUsage) {
+          return; // client did not ask for the trailing usage chunk
+        }
+        write(`data: ${JSON.stringify(obj)}\n\n`);
+      });
+      write('data: [DONE]\n\n');
+    })();
+    const winner = await Promise.race([bodyIter.then(() => 'body'), clientGone.then(() => 'client')]);
+    if (winner === 'client') {
+      log('client disconnected, aborting upstream');
+      try { await upstream.body.cancel(); } catch { /* ignore */ }
+      recordChat('aborted', null, { type: 'client_gone', message: 'client disconnected before completion' });
+      return;
+    }
+    if (!sawAny && !lastUsage) finalize('failed', 'upstream returned an empty stream');
+    else finalize('completed');
+  } catch (e) {
+    log('stream error:', e.message);
+    finalize('failed', e.message);
+  }
+}
+
+/* ------------------------------------ POST /v1/messages (anthropic protocol) -- */
+
+async function handleMessages(req, res) {
+  let r;
+  try {
+    r = JSON.parse((await readBody(req)) || '{}');
+  } catch (e) {
+    return jsonReply(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'invalid JSON: ' + e.message } });
+  }
+
+  const clientModel = String(r.model || '');
+  const { body: chatBody, aliases, inputTokens } = anthropicToChat(r);
+  chatBody.model = resolveModel(clientModel);
+  const streaming = r.stream !== false;
+  log(`messages: model=${chatBody.model} client=${clientModel || '-'} msgs=${chatBody.messages.length} tools=${chatBody.tools.length} stream=${streaming}`);
+  const t0 = Date.now();
+  const recordChat = (status, usage, err) =>
+    recordUsage({ kind: 'chat', model: chatBody.model, status, ...(usage ? { usage } : {}), ...(err ? { err } : {}), ms: Date.now() - t0 });
+
+  let upstream;
+  try {
+    upstream = await postChat(chatBody);
+  } catch (e) {
+    return jsonReply(res, 502, toAnthropicError(502, { error: { message: 'bridge: upstream request failed: ' + e.message } }));
+  }
+  if (!upstream.ok) {
+    const txt = await upstream.text().catch(() => '');
+    log(`upstream ${upstream.status}: ${txt.slice(0, 300)}`);
+    recordChat(upstream.status, null, parseUpstreamErr(txt));
+    res.writeHead(upstream.status, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify(toAnthropicError(upstream.status, txt)));
+  }
+
+  if (!streaming) {
+    const agg = newAgg();
+    try {
+      await readSse(upstream, (obj) => consumeAgg(agg, obj));
+    } catch (e) {
+      recordChat('failed', null, { type: 'upstream_error', message: String(e.message).slice(0, 200) });
+      return jsonReply(res, 502, toAnthropicError(502, { error: { message: 'bridge: upstream stream error: ' + e.message } }));
+    }
+    if (aggEmpty(agg)) {
+      recordChat('failed', null, { type: 'empty_stream', message: 'upstream returned an empty stream' });
+      return jsonReply(res, 502, toAnthropicError(502, { error: { message: 'bridge: upstream returned an empty stream' } }));
+    }
+    const toolCalls = [...agg.toolCalls.values()].map((rec) => ({
+      id: rec.id,
+      name: mapBack(rec.name, aliases),
+      args: rec.args,
+    }));
+    recordChat('completed', agg.usage, null);
+    return jsonReply(
+      res,
+      200,
+      anthropicResult({
+        model: clientModel,
+        content: agg.content,
+        toolCalls,
+        finish: agg.finish,
+        usage: agg.usage,
+        inputTokens,
+      }),
+    );
+  }
+
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  const write = sseWriter(res);
+  const send = (type, payload) => write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
+  const conv = makeAnthropicConverter({ send, model: clientModel, inputTokens, mapToolName: (n) => mapBack(n, aliases) });
+  conv.begin();
+
+  const clientGone = new Promise((resolve) => req.on('close', resolve));
+  let finished = false;
+  const finalize = (status, msg) => {
+    if (finished) return;
+    finished = true;
+    let fin = null;
+    try { fin = conv.finish(status, msg); } catch (e) { log('finish error:', e.message); }
+    recordChat(
+      status,
+      fin && fin.usage ? fin.usage : null,
+      msg ? { type: status === 'completed' ? 'stream' : String(status), message: String(msg).slice(0, 200) } : null,
+    );
+    res.end();
+  };
+
+  try {
+    const bodyIter = (async () => {
+      await readSse(upstream, (obj) => conv.handleChunk(obj));
+    })();
+    const winner = await Promise.race([bodyIter.then(() => 'body'), clientGone.then(() => 'client')]);
+    if (winner === 'client') {
+      log('client disconnected, aborting upstream');
+      try { await upstream.body.cancel(); } catch { /* ignore */ }
+      recordChat('aborted', null, { type: 'client_gone', message: 'client disconnected before completion' });
+      return;
+    }
+    if (conv.empty()) finalize('failed', 'upstream returned an empty stream');
+    else finalize('completed');
+  } catch (e) {
+    log('stream error:', e.message);
+    finalize('failed', e.message);
+  }
+}
+
+/* ------------------------------- POST /v1/messages/count_tokens (local est.) -- */
+
+async function handleCountTokens(req, res) {
+  let r;
+  try {
+    r = JSON.parse((await readBody(req)) || '{}');
+  } catch (e) {
+    return jsonReply(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'invalid JSON: ' + e.message } });
+  }
+  jsonReply(res, 200, countTokens(r));
 }
 
 const server = http.createServer(async (req, res) => {
@@ -602,6 +995,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && /\/models$/.test(url)) return handleModels(res);
     if (req.method === 'POST' && /\/responses$/.test(url)) return await handleResponses(req, res);
+    if (req.method === 'POST' && /\/chat\/completions$/.test(url)) return await handleChat(req, res);
+    if (req.method === 'POST' && /\/messages\/count_tokens$/.test(url)) return await handleCountTokens(req, res);
+    if (req.method === 'POST' && /\/messages$/.test(url)) return await handleMessages(req, res);
     jsonReply(res, 404, { error: { message: `no route: ${req.method} ${url}`, type: 'invalid_request_error' } });
   } catch (e) {
     log('handler error:', e.stack || e.message);

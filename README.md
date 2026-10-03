@@ -1,6 +1,6 @@
 # codex-ocfree
 
-**把 OpenCode 的免费模型（Zen 网关 `*-free`）接进 Codex CLI：本地协议桥 + 按 profile 隔离会话 + 终端 TUI 切模型。**
+**把 OpenCode 的免费模型（Zen 网关 `*-free`）接进 Codex CLI 与主流 Agent：本地协议桥（三协议端点）+ 按 profile 隔离会话 + helper 中控台 + 终端 TUI 切模型。**
 
 [![license](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg)](https://nodejs.org)
@@ -13,7 +13,11 @@
 codex --profile opencode
    │  OpenAI Responses API (wire_api="responses", SSE)
    ▼
-本地桥  127.0.0.1:8973/v1/responses        ← codex-ocfree up
+本地桥  127.0.0.1:8973/v1/responses          ← codex-ocfree up
+        ├─ /v1/chat/completions   OpenAI 兼容（dsh / opencode / 其它客户端）
+        ├─ /v1/messages           Anthropic 兼容（Claude Code / zcode 等）
+        │    └─ /v1/messages/count_tokens
+        └─ /v1/models             双格式模型列表
    │  chat/completions (SSE) + 网关门禁 headers/body
    ▼
 https://opencode.ai/inference/openai/v1/chat/completions   ← OpenCode Zen 免费模型
@@ -31,9 +35,11 @@ https://opencode.ai/inference/openai/v1/chat/completions   ← OpenCode Zen 免�
 | | 说明 |
 |---|---|
 | **协议桥** | Codex 只认 `wire_api="responses"`，免费模型只认 `/chat/completions` — 本地无依赖桥做双向转换（Node ≥22，零第三方包） |
+| **三协议端点** | 同一端口同时说三种协议：`/v1/responses`（Codex）、`/v1/chat/completions`（OpenAI 兼容）、`/v1/messages` + `count_tokens`（Anthropic / Claude Code），`/v1/models` 双格式 — 任何 OpenAI / Anthropic 兼容客户端都能直连 |
+| **helper 中控台** | `codex-ocfree helper configure/reset <agent>` 一键把 codex / claude-code / dsh / opencode 指向本地桥（原值逐键备份、可还原）；trae / zcode 打印 GUI 指引卡；其余 7 个 agent 仅检测 |
 | **会话隔离** | `codex --profile X` 默认与裸 `codex` 共享全部会话/历史；codex-ocfree 给每个 profile 一份独立 `CODEX_HOME`（`~/.codex.d/X/`），配置和 skills 仍 symlink 共享 |
 | **模型切换** | `codex-ocfree models` 终端 TUI 一键切默认模型；`codex-ocfree refresh` 探测上游真实可用性，只列能用的 |
-| **额度显示** | `codex-ocfree quota` 本地统计今日/5h 窗口用量与触顶记录；对话里直接问模型“额度还剩多少”也能答 |
+| **额度显示** | `codex-ocfree quota` 本地统计今日/5h 窗口用量与触顶记录；对话里直接问模型“额度还剩多少”也能答（所有端点的请求都记账） |
 | **一键体检** | `codex-ocfree doctor` 检查运行时、桥、profile 配置、模型目录、隔离 home、shell 集成 |
 
 ### 和 cc-switch 的关系
@@ -54,7 +60,7 @@ https://opencode.ai/inference/openai/v1/chat/completions   ← OpenCode Zen 免�
 git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && bash install.sh
 
 # B. Release 离线包：不 clone、不经 npm registry（tgz 是 release 附件）
-npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.2.0/codex-ocfree-0.2.0.tgz && codex-ocfree setup
+npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.0/codex-ocfree-0.3.0.tgz && codex-ocfree setup
 
 # C. npm 直装（走 GitHub 源）
 npm i -g --allow-git=all git+https://github.com/LiuSantu123/codex-ocfree.git && codex-ocfree setup
@@ -66,9 +72,14 @@ codex --profile opencode      # 开聊；会话历史与裸 codex 完全隔离
 
 `setup` = 写 profile + 探测可用模型（首次约 1 分钟，`--no-probe` 跳过）+ 生成模型目录 + 会话隔离 + shell 包装；方式 A 的 `install.sh` 已包含 setup。无 npm 的机器上 `install.sh` 自动降级为 `~/.local/bin` 软链。
 
-> npm ≥ 12 出于供应链安全默认 `allow-git=none` / `allow-remote=none`（禁用 git 源与远程 tarball 直装），所以 B/C 需要 `--allow-*` 放行（npm ≤ 11 可省略）。也可以把 tgz 下载到本地后安装：`npm i -g ./codex-ocfree-0.2.0.tgz`（本地文件不触发白名单）。
+> npm ≥ 12 出于供应链安全默认 `allow-git=none` / `allow-remote=none`（禁用 git 源与远程 tarball 直装），所以 B/C 需要 `--allow-*` 放行（npm ≤ 11 可省略）。也可以把 tgz 下载到本地后安装：`npm i -g ./codex-ocfree-0.3.0.tgz`（本地文件不触发白名单）。
 
-之后日常只需要两条命令：`codex-ocfree up`（桥常驻即可）和 `codex --profile opencode`。上游免费池会变，隔段时间跑一次 `codex-ocfree refresh` 更新可用模型。
+之后日常只需要两条命令：`codex-ocfree up`（桥常驻即可）和 `codex --profile opencode`。上游免费池会变，隔段时间跑一次 `codex-ocfree refresh` 更新可用模型。**其它 Agent（Claude Code / dsh / opencode…）用 helper 接入**：
+
+```bash
+codex-ocfree helper list                 # 看本机装了哪些 agent、接入状态与配置路径
+codex-ocfree helper configure opencode   # 例：把 opencode 指向本地桥（改前自动备份）
+```
 
 `setup` 之后需要 `source ~/.bashrc` / `source ~/.zshrc` 或**开一个新终端**，让 `codex()` 包装函数生效（它负责在看到 `--profile X` 时切换 `CODEX_HOME`）。包装写进哪个 rc 由 `$SHELL` 自动判断（**bash / zsh 均支持**，两者数组下标不同所以片段不同），也可 `--shell bash|zsh` 显式指定。
 
@@ -93,6 +104,11 @@ codex-ocfree profile                   列出隔离 home 与启动方式
 codex-ocfree profile add <name>        新建一个隔离 home
 codex-ocfree run [-p <p>] <codex args> 起桥(按需) + 设 CODEX_HOME + 代跑 codex（脚本/CI 环境用）
 codex-ocfree shell [zsh|bash]          打印 codex() 包装片段（默认按 $SHELL，自己贴到对应 rc）
+
+codex-ocfree helper                    交互向导（TTY；非 TTY 等价 list）
+codex-ocfree helper list [--json]      检测 13 个 agent：安装/配置状态/配置路径/协议
+codex-ocfree helper configure <agent>   指向本地桥：codex claude-code dsh opencode（trae/zcode 打印 GUI 指引卡）
+codex-ocfree helper reset <agent>       只移除注入项、还原原值（其余设置保留）
 ```
 
 常用组合：
@@ -102,6 +118,63 @@ codex --profile opencode -m <slug>      # 本次会话临时换模型
 codex-ocfree use <slug>                     # 改默认模型（下次启动生效）
 codex-ocfree run -p opencode exec --skip-git-repo-check "..."   # 一条命令：桥 + 隔离 + 非交互执行
 ```
+
+## 三协议端点
+
+桥在同一个端口上同时说三种协议，任何 OpenAI / Anthropic 兼容客户端都能直连：
+
+| 端点 | 协议 | 典型客户端 |
+|---|---|---|
+| `POST /v1/responses` | OpenAI Responses（SSE） | codex（`wire_api="responses"`） |
+| `POST /v1/chat/completions` | OpenAI Chat（流式/非流式） | dsh、opencode、OpenAI 兼容客户端 |
+| `POST /v1/messages`、`/v1/messages/count_tokens` | Anthropic Messages | Claude Code、zcode 等 Anthropic 兼容客户端 |
+| `GET /v1/models` | 双格式（`object:"list"` + `type:"list"`，条目含 `display_name`） | 各家模型列表 UI |
+
+- 三种协议最终都落到上游 `chat/completions`；请求里的模型不在免费目录时**自动回退到当前默认免费模型**，响应里回显客户端原名。
+- Chat / Anthropic 端点同样补齐上游门禁：UA、`x-opencode-session`、`stream:true`、tools 含 `read`+`shell`；客户端没带工具时自动注入等价工具（按客户端工具克隆 schema，响应侧按原名映射回去，参数无损）。
+- 客户端要非流式就本地聚合；用量照常记进 `usage.jsonl`（`kind:"chat"`），`codex-ocfree quota` 覆盖所有客户端。
+- 第一版 Anthropic 端点**不透传 thinking/reasoning 块**（双向都丢弃）；图片输入降级为 `[image omitted]`；错误码映射（上游 429 → `rate_limit_error` 等）。
+
+## helper 中控台：把免费桥接到其它 Agent
+
+形态对标 `arkcli helper`：`helper`（TTY 交互向导）/ `helper list [--json]` / `helper configure <agent>` / `helper reset <agent>`。
+
+| agent | 支持级别 | `configure` 做什么 |
+|---|---|---|
+| **codex** | 自动 | 写 `~/.codex/opencode.config.toml` profile + 会话隔离（即 setup/init 路径） |
+| **claude-code** | 自动（外科手术式） | `~/.claude/settings.json` 只动三把 `env` 键：`ANTHROPIC_BASE_URL`→本地桥、`ANTHROPIC_AUTH_TOKEN`→占位、`ANTHROPIC_MODEL`→当前免费模型；**其余键原样保留** |
+| **dsh**（DeepSeek Harness） | 自动 | `~/.dsh/cordis.patch.yml`（loader patch **数组**）注入 `llm-pi-ai.providers.ocfree` + `agent-default-model`；凭据写 `~/.dsh/.env` 的 `OCFREE_API_KEY`（实测 `settings.yaml` 不被启动路径读取，故写 patch 文件） |
+| **opencode** | 自动 | `~/.config/opencode/opencode.json` 注入 `provider.ocfree`（**不改你的默认模型**，用 `/models` 或 `-m ocfree/<id>` 选） |
+| **trae** | 仅指引卡 | 配置存在加密 `state.vscdb`，只能 GUI 填 — 打印带 URL / key / model 的步骤卡 |
+| **zcode** | 仅指引卡 | 配置 schema 随版本漂移且本机无安装 — 打印可粘贴 JSON 片段（`kind:"anthropic"`、`baseURL` 不带 `/v1`），**不代写文件** |
+| workbuddy / cursor / grok / kimi-code / openclaw / hermes / pi | 仅检测 | `helper list` 报告安装与配置状态（未适配，configure 会拒绝） |
+
+**安全与还原**：
+
+- 每次 configure **先把原文件整份快照**进 `~/.codex-ocfree/backups/`，并把**逐键原值**记进 `helper-state.json`；
+- `helper reset <agent>` 只删注入项（marker 段 / 逐键），你的其它设置原样保留、原值逐键还原；重复 configure **幂等**（不会用桥的值覆盖原值记录）；
+- 实测覆盖：claude-code 隔离 HOME 全流程（改 → 还原 → 幂等 → 二次 reset 无副作用）、dsh 三种文件形态（全新 / 已有同名 entry / 已有自己的默认模型）、opencode 与 codex 的注入与还原、trae/zcode 指引卡只打印不落盘。
+
+### Claude Code：切换与还原（按需执行）
+
+`helper configure claude-code` 能力已实现并通过隔离测试，**是否在本机执行由你决定**——若 `~/.claude/settings.json` 已被其它工具占用（例如 arkcli），就不要动它：
+
+```bash
+codex-ocfree helper configure claude-code   # 注入三键（先整份备份）
+claude -p "..."                             # 走免费桥
+codex-ocfree helper reset claude-code       # 逐键还原（含删除我们新增的键）
+```
+
+手动等价操作（不依赖本工具）：在 `settings.json` 的 `env` 里设
+`ANTHROPIC_BASE_URL=http://127.0.0.1:8973`、`ANTHROPIC_AUTH_TOKEN=ocfree-local`、`ANTHROPIC_MODEL=<免费slug>`；
+还原即把三键改回原值或删掉。**改前先备份原文件。**
+
+真实客户端实测：`claude -p`（默认 `claude-opus-5-5`）与 `claude --model sonnet`（`claude-sonnet-5`）都被桥回退到免费模型正常作答，23 个工具场景下门禁注入与用量记录均正常。
+
+### dsh / opencode 真实 E2E 实测
+
+- **dsh**：`helper configure dsh` 产出的 `cordis.patch.yml` 过 `dsh web --dump-config` schema 验收（exit 0、ocfree 进入组合配置）；`dsh headless "<任务>"` 不带任何 export 直接把 2 个请求打到桥并拿到真实回复（凭据纯靠 `~/.dsh/.env`）。
+- **opencode**：隔离 HOME 下 `helper configure opencode` 后 `opencode run -m ocfree/<model>` 两次都拿到真实回复，桥日志与 `usage.jsonl` 记录齐全。
 
 ## 会话 / 历史按 profile 隔离
 
@@ -164,6 +237,11 @@ codex-ocfree run -p opencode exec --skip-git-repo-check "..."   # 一条命令�
 | codex 警告 `Model metadata not found` | `model_catalog_json` 路径不对，或 JSON 含 Codex 不认的枚举 — 用 `codex-ocfree catalog` 重新生成 |
 | `codex --profile X` 没隔离会话 | shell 包装没装/没重载 — `codex-ocfree doctor` 看那一行（bash/zsh 都检查），或用 `codex-ocfree run -p X` |
 | 端口被占 | 换 `OC2C_PORT`，并同步改 profile 里的 `base_url` |
+| `helper configure claude-code` 后 claude 没走桥 | claude 读 `settings.json` 的 `env`：`helper list` 看 configured 状态、确认桥在跑（`codex-ocfree status`）、重启 claude；改完没重启不生效 |
+| dsh 报 `MISSING_CREDENTIAL` / `No API key for provider` | pi-ai 强制要凭据：重跑 `helper configure dsh` 补 `~/.dsh/.env`（`OCFREE_API_KEY`，实测该文件会被读取，无需 export） |
+| dsh 报 `cordis.patch.yml must be a top-level YAML array` | 该文件必须是 loader patch 数组格式（helper 写的就是）；手工编辑破坏了格式就按 `helper configure dsh` 输出的形状改回 |
+| opencode 报 `Managed service port ... already in use` | 机器上已有 opencode 服务占了默认托管端口（与本项目无关）：`opencode service set port <其他端口>` |
+| Anthropic 客户端没看到 thinking 内容 | v0.3.0 第一版有意丢弃 reasoning/thinking 块（双向），文本与工具不受影响 |
 
 ## 项目结构
 
@@ -172,7 +250,10 @@ codex-ocfree/
 ├── bin/codex-ocfree.mjs        入口
 ├── src/
 │   ├── cli.mjs             命令分发 / setup / run
-│   ├── bridge.mjs          协议桥（responses ↔ chat/completions，零依赖）
+│   ├── bridge.mjs          协议桥（responses / chat / anthropic 三端点 → chat/completions，零依赖）
+│   ├── gate.mjs            网关门禁的工具注入与别名映射（read/shell 按客户端工具克隆）
+│   ├── anthropic.mjs       Anthropic Messages ⇄ chat 双向转换（SSE 事件流、非流式聚合）
+│   ├── helper.mjs          helper 中控台（13 agent 检测 / configure / reset / 指引卡）
 │   ├── bridgectl.mjs       桥控制（start/stop/health）
 │   ├── profiles.mjs        CODEX_HOME 隔离 + bash/zsh codex() 包装
 │   ├── probe.mjs           上游可用性探测
