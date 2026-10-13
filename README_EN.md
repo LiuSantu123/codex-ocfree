@@ -26,7 +26,7 @@ Requirements: Node.js ≥ 22, [codex-cli](https://github.com/openai/codex) (test
 git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && bash install.sh
 
 # B. release asset: no clone, no npm registry (tgz attached to the release)
-npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.1/codex-ocfree-0.3.1.tgz && codex-ocfree setup
+npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.2/codex-ocfree-0.3.2.tgz && codex-ocfree setup
 
 # C. straight from npm, GitHub source
 npm i -g --allow-git=all git+https://github.com/LiuSantu123/codex-ocfree.git && codex-ocfree setup
@@ -38,7 +38,7 @@ codex --profile opencode    # sessions/history isolated from plain `codex`
 
 `setup` = write the profile + probe available models (~1 min first run, `--no-probe` to skip) + build the catalog + install session isolation + shell wrapper; `install.sh` (A) already runs it. Machines without npm fall back to `~/.local/bin` symlinks.
 
-> npm ≥ 12 disables git sources and remote tarballs by default (`allow-git` / `allow-remote` = `none`, supply-chain hardening) — hence the `--allow-*` flags on B/C (unneeded on npm ≤ 11). Alternatively download the tgz and install the local file: `npm i -g ./codex-ocfree-0.3.1.tgz` (local files need no flags).
+> npm ≥ 12 disables git sources and remote tarballs by default (`allow-git` / `allow-remote` = `none`, supply-chain hardening) — hence the `--allow-*` flags on B/C (unneeded on npm ≤ 11). Alternatively download the tgz and install the local file: `npm i -g ./codex-ocfree-0.3.2.tgz` (local files need no flags).
 
 Day to day you only need `codex-ocfree up` and `codex --profile opencode`. The upstream free pool changes over time — run `codex-ocfree refresh` occasionally to update the working-model list. For other agents, use the helper console:
 

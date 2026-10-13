@@ -60,7 +60,7 @@ https://opencode.ai/inference/openai/v1/chat/completions   ← OpenCode Zen 免�
 git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && bash install.sh
 
 # B. Release 离线包：不 clone、不经 npm registry（tgz 是 release 附件）
-npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.1/codex-ocfree-0.3.1.tgz && codex-ocfree setup
+npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.2/codex-ocfree-0.3.2.tgz && codex-ocfree setup
 
 # C. npm 直装（走 GitHub 源）
 npm i -g --allow-git=all git+https://github.com/LiuSantu123/codex-ocfree.git && codex-ocfree setup
@@ -72,7 +72,7 @@ codex --profile opencode      # 开聊；会话历史与裸 codex 完全隔离
 
 `setup` = 写 profile + 探测可用模型（首次约 1 分钟，`--no-probe` 跳过）+ 生成模型目录 + 会话隔离 + shell 包装；方式 A 的 `install.sh` 已包含 setup。无 npm 的机器上 `install.sh` 自动降级为 `~/.local/bin` 软链。
 
-> npm ≥ 12 出于供应链安全默认 `allow-git=none` / `allow-remote=none`（禁用 git 源与远程 tarball 直装），所以 B/C 需要 `--allow-*` 放行（npm ≤ 11 可省略）。也可以把 tgz 下载到本地后安装：`npm i -g ./codex-ocfree-0.3.1.tgz`（本地文件不触发白名单）。
+> npm ≥ 12 出于供应链安全默认 `allow-git=none` / `allow-remote=none`（禁用 git 源与远程 tarball 直装），所以 B/C 需要 `--allow-*` 放行（npm ≤ 11 可省略）。也可以把 tgz 下载到本地后安装：`npm i -g ./codex-ocfree-0.3.2.tgz`（本地文件不触发白名单）。
 
 之后日常只需要两条命令：`codex-ocfree up`（桥常驻即可）和 `codex --profile opencode`。上游免费池会变，隔段时间跑一次 `codex-ocfree refresh` 更新可用模型。**其它 Agent（Claude Code / dsh / opencode…）用 helper 接入**：
 
@@ -232,7 +232,7 @@ codex-ocfree helper reset claude-code       # 逐键还原（含删除我们新�
 |---|---|
 | codex 报 `Model is unavailable` | 上游模型下线（不是桥的问题）。跑 `codex-ocfree refresh` |
 | `ModelProtocolUnsupported` | 请求打到了 `/responses`：检查 profile `base_url = "http://127.0.0.1:8973/v1"`、`wire_api = "responses"`、桥在跑（`codex-ocfree status`） |
-| 403 / `FreeTierError` | 上游门禁变了：UA 需 `opencode/<semver>/cli`、session 需 `ses_`+12hex+14 位、body 需 `stream:true` 且 tools 含 `read`+`shell`。改 `src/bridge.mjs` 的 `gateHeaders()` |
+| 403 / `FreeTierError` | 上游门禁变了：UA 需 `opencode/<semver>/cli`、session 前 12 hex 必须按 `(0xffe - 4096*now_ms) mod 2^48` 生成（不能随机，见 `newSessionId()`）、body 需 `stream:true` 且 tools 含 `read`+`shell` |
 | 429 / `FreeUsageLimitError` | 免费额度触顶（约 200 次/5h 窗口，社区实测值）。等窗口滑过；`codex-ocfree quota` 看本地进度与触顶记录 |
 | 401 | 过期 OAuth token；桥会自动降级为匿名重试，仍持续就 `codex-ocfree down && codex-ocfree up` |
 | codex 警告 `Model metadata not found` | `model_catalog_json` 路径不对，或 JSON 含 Codex 不认的枚举 — 用 `codex-ocfree catalog` 重新生成 |

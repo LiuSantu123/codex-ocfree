@@ -9,11 +9,14 @@
  *   Anthropic agents              /                          free models
  *     (Claude Code/ZCode)       -> /v1/messages (+count_tokens)
  *
- * Upstream gate requirements (verified empirically 2026-09):
+ * Upstream gate requirements (verified empirically 2026-09, session rule re-verified 2026-10-14):
  *   - URL      : https://opencode.ai/inference/openai/v1/chat/completions
  *     (free models on /responses return ModelProtocolUnsupported; /zen/v1 returns 403)
  *   - UA       : opencode/<semver>/cli  (>= some minimum semver; "latest" channel ok)
- *   - session  : "ses_" + 12 lowercase hex + 14 alnum
+ *   - session  : "ses_" + 12 lowercase hex + 14 alnum; the 12 hex is NOT random —
+ *     since 2026-10 the gate checks it follows the genuine generator
+ *     prefix = (0xffe - 4096 * now_ms) mod 2^48 (always ends in "ffe");
+ *     random prefixes get 403 FreeTierError. See newSessionId().
  *   - body     : stream:true AND tools[] must contain names "read" AND "shell"
  *   - auth     : optional; a fresh OAuth token from opencode.db is used when available,
  *     otherwise no Authorization header (both return 200; a stale token returns 401)
@@ -67,8 +70,15 @@ const rid = () => randomBytes(8).toString('hex');
 const log = (...a) => console.error(`[oc2c ${new Date().toISOString()}]`, ...a);
 
 function newSessionId() {
-  // "ses_" + 12 lowercase hex + 14 alphanumeric (verified gate format)
-  return 'ses_' + randomBytes(6).toString('hex') + rand(14);
+  // "ses_" + 12 lowercase hex + 14 alphanumeric.
+  // The 12 hex digits are NOT random: the upstream gate only accepts session
+  // ids whose 48-bit prefix follows the genuine OpenCode generator,
+  // prefix = (0xffe - 4096 * now_ms) mod 2^48 (all genuine ids end in "ffe").
+  // Random prefixes are rejected with 403 FreeTierError.
+  const prefix = ((0xffen - 4096n * BigInt(Date.now())) & ((1n << 48n) - 1n))
+    .toString(16)
+    .padStart(12, '0');
+  return 'ses_' + prefix + rand(14);
 }
 
 /**

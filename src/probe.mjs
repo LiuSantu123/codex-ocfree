@@ -26,6 +26,13 @@ const fake = (n) => ({
   function: { name: n, description: 'alias of exec_command', parameters: { type: 'object', properties: {} } },
 });
 
+// Upstream gate only accepts session ids generated like genuine OpenCode:
+// prefix = hex48((0xffe - 4096 * now_ms) mod 2^48); random prefixes → 403.
+const newSessionId = () =>
+  'ses_' +
+  (((0xffen - 4096n * BigInt(Date.now())) & ((1n << 48n) - 1n)).toString(16).padStart(12, '0')) +
+  Math.random().toString(36).slice(2, 8).padEnd(14, 'x');
+
 async function freeIdsFromMeta() {
   try {
     const models = await loadModelsMap(); // db cache, falls back to models.dev online
@@ -62,7 +69,7 @@ export async function probe(explicitIds = []) {
         headers: {
           'content-type': 'application/json',
           'user-agent': UA,
-          'x-opencode-session': 'ses_' + 'a1b2c3d4e5f6' + Math.random().toString(36).slice(2, 8).padEnd(14, 'x'),
+          'x-opencode-session': newSessionId(),
         },
         body: JSON.stringify({
           model: id,
