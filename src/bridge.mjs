@@ -64,6 +64,18 @@ const REQ_TIMEOUT_MS = Number(process.env.OC2C_TIMEOUT_MS || 10 * 60 * 1000);
 /** Gate: request must advertise tools with these exact names (mapped back to exec_command). */
 const GATE_TOOL_NAMES = ['read', 'shell'];
 
+/**
+ * The free tier intermittently answers HTTP 200 with a role-only stream — no
+ * content, no reasoning, no tool calls (reproduced against upstream directly,
+ * across models; see README troubleshooting). Instead of relaying a silently
+ * empty reply, the bridge emits this notice as assistant text so the client
+ * shows something actionable.
+ */
+const EMPTY_HINT =
+  '⚠️ Upstream returned an empty completion (OpenCode\'s free tier is intermittently flaky — '
+  + 'not a bridge/local problem). Please resend your last message. '
+  + '上游免费层偶发空补全，请直接重发本条消息。';
+
 const ALPH = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const rand = (n) => Array.from({ length: n }, () => ALPH[randomBytes(1)[0] % 36]).join('');
 const rid = () => randomBytes(8).toString('hex');
@@ -337,6 +349,24 @@ function makeConverter(r, send, aliases) {
 
   const mapToolName = (name) => (aliases && aliases.has(name) ? 'exec_command' : name);
 
+  /** open (if needed) the assistant message item and stream a text delta into it */
+  const writeText = (text) => {
+    finishReasoning();
+    if (!msg) {
+      const idx = outIdx++;
+      const id = 'msg_' + rid();
+      msg = { idx, id, text: '' };
+      pushItem(idx, { type: 'message', id, role: 'assistant', status: 'in_progress', content: [] });
+      ev('response.output_item.added', { output_index: idx, item: { type: 'message', id, role: 'assistant', status: 'in_progress', content: [] } });
+      ev('response.content_part.added', { item_id: id, output_index: idx, content_index: 0, part: { type: 'output_text', text: '' } });
+    }
+    msg.text += text;
+    ev('response.output_text.delta', { item_id: msg.id, output_index: msg.idx, content_index: 0, delta: text, logprobs: [] });
+  };
+
+  /** emit a visible assistant text item (used to surface an empty upstream completion) */
+  const hint = (text) => { gotAnything = true; writeText(text); };
+
   const handleChunk = (chunk) => {
     if (chunk && chunk.usage) usageRaw = chunk.usage;
     const choice = chunk && Array.isArray(chunk.choices) ? chunk.choices[0] : null;
@@ -363,17 +393,7 @@ function makeConverter(r, send, aliases) {
 
     if (typeof delta.content === 'string' && delta.content) {
       gotAnything = true;
-      finishReasoning();
-      if (!msg) {
-        const idx = outIdx++;
-        const id = 'msg_' + rid();
-        msg = { idx, id, text: '' };
-        pushItem(idx, { type: 'message', id, role: 'assistant', status: 'in_progress', content: [] });
-        ev('response.output_item.added', { output_index: idx, item: { type: 'message', id, role: 'assistant', status: 'in_progress', content: [] } });
-        ev('response.content_part.added', { item_id: id, output_index: idx, content_index: 0, part: { type: 'output_text', text: '' } });
-      }
-      msg.text += delta.content;
-      ev('response.output_text.delta', { item_id: msg.id, output_index: msg.idx, content_index: 0, delta: delta.content, logprobs: [] });
+      writeText(delta.content);
     }
 
     if (Array.isArray(delta.tool_calls)) {
@@ -437,7 +457,10 @@ function makeConverter(r, send, aliases) {
     },
     handleChunk,
     finish,
+    hint,
     empty: () => !gotAnything && !usageRaw,
+    /** true when the stream carried no content / reasoning / tool call at all */
+    noContent: () => !gotAnything,
     get response() { return resp; },
   };
 }
@@ -571,7 +594,10 @@ function consumeAgg(agg, obj) {
   }
   if (ch.finish_reason) agg.finish = ch.finish_reason;
 }
-const aggEmpty = (agg) => !agg.usage && !agg.content && !agg.reasoning && agg.toolCalls.size === 0;
+/** true when the aggregated upstream stream carried no content / reasoning / tool call */
+const aggNoContent = (agg) => !agg.content && !agg.reasoning && agg.toolCalls.size === 0;
+/** usage-log label for a served-but-empty upstream completion */
+const emptyStreamErr = () => ({ type: 'empty_stream', message: 'upstream returned an empty stream (hint served)' });
 
 async function handleResponses(req, res) {
   let r;
@@ -641,10 +667,11 @@ async function handleResponses(req, res) {
       recordChat('failed', null, { type: 'upstream_error', message: String(e.message).slice(0, 200) });
       return jsonReply(res, 502, { error: { message: 'bridge: upstream stream error: ' + e.message, type: 'upstream_error' } });
     }
-    const finalStatus = conv.empty() ? 'failed' : 'completed';
-    const final = conv.finish(finalStatus, finalStatus === 'failed' ? 'upstream returned an empty stream' : null);
-    recordChat(finalStatus, final.usage || null, finalStatus === 'failed' ? { type: 'empty_stream', message: 'upstream returned an empty stream' } : null);
-    return jsonReply(res, finalStatus === 'failed' ? 502 : 200, final);
+    const noContent = conv.noContent();
+    if (noContent) conv.hint(EMPTY_HINT); // visible notice instead of a silent empty reply
+    const final = conv.finish('completed');
+    recordChat(noContent ? 'failed' : 'completed', final.usage || null, noContent ? emptyStreamErr() : null);
+    return jsonReply(res, 200, final);
   }
 
   res.writeHead(200, {
@@ -699,8 +726,14 @@ async function handleResponses(req, res) {
       recordChat('aborted', null, { type: 'client_gone', message: 'client disconnected before completion' });
       return;
     }
-    if (conv.empty()) finalize('failed', 'upstream returned an empty stream');
-    else finalize('completed');
+    if (conv.noContent()) {
+      conv.hint(EMPTY_HINT); // visible notice instead of a silent empty reply
+      const fin = conv.finish('completed');
+      finished = true;
+      recordChat('failed', (fin && fin.usage) || null, emptyStreamErr());
+      return res.end();
+    }
+    finalize('completed');
   } catch (e) {
     log('stream error:', e.message);
     if (!finished) {
@@ -788,9 +821,24 @@ async function handleChat(req, res) {
       recordChat('failed', null, { type: 'upstream_error', message: String(e.message).slice(0, 200) });
       return jsonReply(res, 502, { error: { message: 'bridge: upstream stream error: ' + e.message, type: 'upstream_error' } });
     }
-    if (aggEmpty(agg)) {
-      recordChat('failed', null, { type: 'empty_stream', message: 'upstream returned an empty stream' });
-      return jsonReply(res, 502, { error: { message: 'bridge: upstream returned an empty stream', type: 'upstream_error' } });
+    if (aggNoContent(agg)) {
+      // visible notice instead of a silent empty reply
+      recordChat('failed', agg.usage || null, emptyStreamErr());
+      return jsonReply(res, 200, {
+        id: 'chatcmpl_' + rid(),
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: clientModel,
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: EMPTY_HINT },
+            finish_reason: 'stop',
+            logprobs: null,
+          },
+        ],
+        usage: agg.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      });
     }
     const usage = agg.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
     const toolCalls = [...agg.toolCalls.values()].map((rec) => ({
@@ -827,7 +875,7 @@ async function handleChat(req, res) {
   });
   const write = sseWriter(res);
   const clientGone = new Promise((resolve) => req.on('close', resolve));
-  let lastUsage = null, sawAny = false, finished = false;
+  let lastUsage = null, sawContent = false, finished = false;
   const finalize = (status, msg) => {
     if (finished) return;
     finished = true;
@@ -845,9 +893,14 @@ async function handleChat(req, res) {
         if (obj.usage) lastUsage = obj.usage;
         const ch = obj.choices && obj.choices[0];
         if (ch) {
-          sawAny = true;
           if (obj.model !== undefined) obj.model = clientModel || obj.model;
           const d = ch.delta || {};
+          // a role-only / finish-only chunk is NOT content: the free tier sometimes
+          // streams nothing else, which used to look like a successful empty reply
+          if ((typeof d.content === 'string' && d.content)
+            || (typeof d.reasoning === 'string' && d.reasoning)
+            || (typeof d.reasoning_content === 'string' && d.reasoning_content)
+            || (Array.isArray(d.tool_calls) && d.tool_calls.length)) sawContent = true;
           if (Array.isArray(d.tool_calls)) {
             for (const tc of d.tool_calls) {
               if (tc && tc.function && tc.function.name) tc.function.name = mapBack(tc.function.name, aliases);
@@ -858,7 +911,6 @@ async function handleChat(req, res) {
         }
         write(`data: ${JSON.stringify(obj)}\n\n`);
       });
-      write('data: [DONE]\n\n');
     })();
     const winner = await Promise.race([bodyIter.then(() => 'body'), clientGone.then(() => 'client')]);
     if (winner === 'client') {
@@ -867,8 +919,21 @@ async function handleChat(req, res) {
       recordChat('aborted', null, { type: 'client_gone', message: 'client disconnected before completion' });
       return;
     }
-    if (!sawAny && !lastUsage) finalize('failed', 'upstream returned an empty stream');
-    else finalize('completed');
+    if (!sawContent) {
+      // nothing usable upstream → emit a visible hint instead of a silent empty reply
+      const base = {
+        id: 'chatcmpl_' + rid(), object: 'chat.completion.chunk',
+        created: Math.floor(Date.now() / 1000), model: clientModel,
+      };
+      write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: EMPTY_HINT }, finish_reason: null, logprobs: null }] })}\n\n`);
+      write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop', logprobs: null }] })}\n\n`);
+      finished = true;
+      recordChat('failed', lastUsage, emptyStreamErr());
+      write('data: [DONE]\n\n');
+      return res.end();
+    }
+    write('data: [DONE]\n\n');
+    finalize('completed');
   } catch (e) {
     log('stream error:', e.message);
     finalize('failed', e.message);
@@ -916,9 +981,21 @@ async function handleMessages(req, res) {
       recordChat('failed', null, { type: 'upstream_error', message: String(e.message).slice(0, 200) });
       return jsonReply(res, 502, toAnthropicError(502, { error: { message: 'bridge: upstream stream error: ' + e.message } }));
     }
-    if (aggEmpty(agg)) {
-      recordChat('failed', null, { type: 'empty_stream', message: 'upstream returned an empty stream' });
-      return jsonReply(res, 502, toAnthropicError(502, { error: { message: 'bridge: upstream returned an empty stream' } }));
+    if (aggNoContent(agg)) {
+      // visible notice instead of a silent empty reply
+      recordChat('failed', agg.usage || null, emptyStreamErr());
+      return jsonReply(
+        res,
+        200,
+        anthropicResult({
+          model: clientModel,
+          content: EMPTY_HINT,
+          toolCalls: [],
+          finish: 'stop',
+          usage: agg.usage,
+          inputTokens,
+        }),
+      );
     }
     const toolCalls = [...agg.toolCalls.values()].map((rec) => ({
       id: rec.id,
@@ -977,8 +1054,14 @@ async function handleMessages(req, res) {
       recordChat('aborted', null, { type: 'client_gone', message: 'client disconnected before completion' });
       return;
     }
-    if (conv.empty()) finalize('failed', 'upstream returned an empty stream');
-    else finalize('completed');
+    if (conv.noContent()) {
+      conv.hint(EMPTY_HINT); // visible notice instead of a silent empty reply
+      const fin = conv.finish('completed');
+      finished = true;
+      recordChat('failed', (fin && fin.usage) || null, emptyStreamErr());
+      return res.end();
+    }
+    finalize('completed');
   } catch (e) {
     log('stream error:', e.message);
     finalize('failed', e.message);

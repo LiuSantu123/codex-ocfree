@@ -26,7 +26,7 @@ Requirements: Node.js ≥ 22, [codex-cli](https://github.com/openai/codex) (test
 git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && bash install.sh
 
 # B. release asset: no clone, no npm registry (tgz attached to the release)
-npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.3/codex-ocfree-0.3.3.tgz && codex-ocfree setup
+npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.4/codex-ocfree-0.3.4.tgz && codex-ocfree setup
 
 # C. straight from npm, GitHub source
 npm i -g --allow-git=all git+https://github.com/LiuSantu123/codex-ocfree.git && codex-ocfree setup
@@ -38,7 +38,7 @@ codex --profile opencode    # sessions/history isolated from plain `codex`
 
 `setup` = write the profile + probe available models (~1 min first run, `--no-probe` to skip) + build the catalog + install session isolation + shell wrapper; `install.sh` (A) already runs it. Machines without npm fall back to `~/.local/bin` symlinks.
 
-> npm ≥ 12 disables git sources and remote tarballs by default (`allow-git` / `allow-remote` = `none`, supply-chain hardening) — hence the `--allow-*` flags on B/C (unneeded on npm ≤ 11). Alternatively download the tgz and install the local file: `npm i -g ./codex-ocfree-0.3.3.tgz` (local files need no flags).
+> npm ≥ 12 disables git sources and remote tarballs by default (`allow-git` / `allow-remote` = `none`, supply-chain hardening) — hence the `--allow-*` flags on B/C (unneeded on npm ≤ 11). Alternatively download the tgz and install the local file: `npm i -g ./codex-ocfree-0.3.4.tgz` (local files need no flags).
 
 Day to day you only need `codex-ocfree up` and `codex --profile opencode`. The upstream free pool changes over time — run `codex-ocfree refresh` occasionally to update the working-model list. For other agents, use the helper console:
 
@@ -103,7 +103,7 @@ The upstream sends **no rate-limit headers** (verified: only `x-opencode-*` meta
 1. Licensed under the **[PolyForm Noncommercial License 1.0.0](LICENSE) — commercial use is not permitted.** Personal / research / hobby use, modification and redistribution are allowed with the license and Required Notice attached.
 2. **Use at your own risk.** The bridge talks to OpenCode's free-model endpoint through local protocol conversion; upstream gating may change at any time. This project is not affiliated with or endorsed by OpenAI, OpenCode, or their affiliates.
 3. The repository contains **no API keys or tokens**; `codex-ocfree setup` only writes files on your machine.
-4. **The free tier is flaky** — it occasionally answers HTTP 200 with an empty stream, or stalls for minutes before any content; reproduced against upstream directly, across models (2026-10-16). Just resend. Note that a few `*-free` ids are simply not enabled for the free tier (`400 Model is unavailable`) — `codex-ocfree refresh` filters those out.
+4. **The free tier is flaky** — it occasionally answers HTTP 200 with an empty stream, or stalls for minutes before any content; reproduced against upstream directly, across models (2026-10-16). As of v0.3.4 the bridge turns that into a **visible notice in the reply** (all three protocols) so you are not left with silence — just resend. Note that a few `*-free` ids are simply not enabled for the free tier (`400 Model is unavailable`) — `codex-ocfree refresh` filters those out.
 
 ## License
 

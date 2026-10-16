@@ -242,6 +242,25 @@ export function makeAnthropicConverter({ send, model, inputTokens, mapToolName =
     send('content_block_stop', { type: 'content_block_stop', index: blockIdx });
   };
 
+  /** open (if needed) the text block and stream a text delta into it */
+  const writeText = (text) => {
+    begin();
+    if (!textOpen) {
+      closeTools();
+      blockIdx += 1;
+      textOpen = true;
+      send('content_block_start', { type: 'content_block_start', index: blockIdx, content_block: { type: 'text', text: '' } });
+    }
+    send('content_block_delta', {
+      type: 'content_block_delta',
+      index: blockIdx,
+      delta: { type: 'text_delta', text },
+    });
+  };
+
+  /** emit a visible text block (used to surface an empty upstream completion) */
+  const hint = (text) => { gotAnything = true; writeText(text); };
+
   const handleChunk = (chunk) => {
     if (chunk && chunk.usage) usageRaw = chunk.usage;
     const choice = chunk && Array.isArray(chunk.choices) ? chunk.choices[0] : null;
@@ -251,18 +270,7 @@ export function makeAnthropicConverter({ send, model, inputTokens, mapToolName =
     // reasoning dropped (see module header)
     if (typeof delta.content === 'string' && delta.content) {
       gotAnything = true;
-      begin();
-      if (!textOpen) {
-        closeTools();
-        blockIdx += 1;
-        textOpen = true;
-        send('content_block_start', { type: 'content_block_start', index: blockIdx, content_block: { type: 'text', text: '' } });
-      }
-      send('content_block_delta', {
-        type: 'content_block_delta',
-        index: blockIdx,
-        delta: { type: 'text_delta', text: delta.content },
-      });
+      writeText(delta.content);
     }
 
     if (Array.isArray(delta.tool_calls)) {
@@ -331,7 +339,7 @@ export function makeAnthropicConverter({ send, model, inputTokens, mapToolName =
     return { usage, stopReason };
   };
 
-  return { begin, handleChunk, finish, empty: () => !gotAnything && !usageRaw };
+  return { begin, handleChunk, finish, hint, empty: () => !gotAnything && !usageRaw, noContent: () => !gotAnything };
 }
 
 export function mapUsage(u) {
