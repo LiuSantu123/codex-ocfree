@@ -93,7 +93,18 @@ ${bold('其它')}
 
 /* ------------------------------------------------------------------ setup -- */
 
-const DEFAULT_MODEL_PREF = ['mimo-v2.6-flash-free', 'mimo-v2.5-free', 'big-pickle'];
+// Preference order for the auto-picked default model. The catalog itself is
+// dynamic (refresh re-probes upstream) — this list only decides which reachable
+// model is used when the user has not picked one yet. Keep in sync with
+// helper.mjs MODEL_PREF.
+// 2026-10-16: promoted deepseek-v4.1 / glm-5.3 flash; dropped mimo-v2.5-free
+// (upstream now returns 410 "deprecated, use mimo-v2.6-flash-free instead").
+const DEFAULT_MODEL_PREF = [
+  'deepseek-v4.1-flash-free',
+  'glm-5.3-flash-free',
+  'mimo-v2.6-flash-free',
+  'big-pickle',
+];
 function pickDefaultModel(models) {
   if (!models.length) return null;
   for (const p of DEFAULT_MODEL_PREF) {

@@ -13,7 +13,7 @@ Full documentation (Chinese): [README.md](README.md)
 - **Codex speaks the OpenAI Responses API** (`wire_api="responses"`), but the free models only answer on `/chat/completions` → a tiny local bridge converts between the two. The same port also speaks **OpenAI Chat** (`/v1/chat/completions`) and **Anthropic Messages** (`/v1/messages` + `count_tokens`), so any compatible client connects directly — all with the upstream gate headers/body handled and local usage accounting.
 - **Other agents can share the bridge too** — `codex-ocfree helper configure <agent>` points codex / Claude Code / dsh / opencode at the local bridge (original values snapshotted and restorable via `helper reset`); trae / zcode get GUI instruction cards; seven more agents are detect-only.
 - **`codex --profile X` does not isolate sessions** — every profile shares `~/.codex` history by default (`sqlite_home` doesn't help). The only reliable lever is `CODEX_HOME`, so codex-ocfree gives each profile its own home under `~/.codex.d/X/` with configs symlinked back to `~/.codex`.
-- **The free model pool changes** — codex-ocfree probes upstream availability and only lists models that actually answer.
+- **The free model pool changes** — codex-ocfree probes upstream availability and only lists models that actually answer (2026-10-16: only 9 of 43 `*-free` ids really responded; transient 429/timeout is common and `mimo-v2.5-free` was deprecated upstream). Until you pick a model explicitly, the default follows the built-in order `deepseek-v4.1-flash-free` → `glm-5.3-flash-free` → `mimo-v2.6-flash-free` → `big-pickle` (first reachable one; an explicit choice is never overwritten).
 - **No official quota numbers exist** — the upstream returns no rate-limit headers, so `codex-ocfree quota` shows an honest local estimate (requests/tokens today, 5h window vs a community-measured ~200/5h reference, 429 hits), and the bridge injects the same figures into the system message so you can just ask the model “how much quota is left” in chat.
 
 ## Quick start
@@ -26,7 +26,7 @@ Requirements: Node.js ≥ 22, [codex-cli](https://github.com/openai/codex) (test
 git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && bash install.sh
 
 # B. release asset: no clone, no npm registry (tgz attached to the release)
-npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.2/codex-ocfree-0.3.2.tgz && codex-ocfree setup
+npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.3/codex-ocfree-0.3.3.tgz && codex-ocfree setup
 
 # C. straight from npm, GitHub source
 npm i -g --allow-git=all git+https://github.com/LiuSantu123/codex-ocfree.git && codex-ocfree setup
@@ -38,7 +38,7 @@ codex --profile opencode    # sessions/history isolated from plain `codex`
 
 `setup` = write the profile + probe available models (~1 min first run, `--no-probe` to skip) + build the catalog + install session isolation + shell wrapper; `install.sh` (A) already runs it. Machines without npm fall back to `~/.local/bin` symlinks.
 
-> npm ≥ 12 disables git sources and remote tarballs by default (`allow-git` / `allow-remote` = `none`, supply-chain hardening) — hence the `--allow-*` flags on B/C (unneeded on npm ≤ 11). Alternatively download the tgz and install the local file: `npm i -g ./codex-ocfree-0.3.2.tgz` (local files need no flags).
+> npm ≥ 12 disables git sources and remote tarballs by default (`allow-git` / `allow-remote` = `none`, supply-chain hardening) — hence the `--allow-*` flags on B/C (unneeded on npm ≤ 11). Alternatively download the tgz and install the local file: `npm i -g ./codex-ocfree-0.3.3.tgz` (local files need no flags).
 
 Day to day you only need `codex-ocfree up` and `codex --profile opencode`. The upstream free pool changes over time — run `codex-ocfree refresh` occasionally to update the working-model list. For other agents, use the helper console:
 
@@ -103,6 +103,7 @@ The upstream sends **no rate-limit headers** (verified: only `x-opencode-*` meta
 1. Licensed under the **[PolyForm Noncommercial License 1.0.0](LICENSE) — commercial use is not permitted.** Personal / research / hobby use, modification and redistribution are allowed with the license and Required Notice attached.
 2. **Use at your own risk.** The bridge talks to OpenCode's free-model endpoint through local protocol conversion; upstream gating may change at any time. This project is not affiliated with or endorsed by OpenAI, OpenCode, or their affiliates.
 3. The repository contains **no API keys or tokens**; `codex-ocfree setup` only writes files on your machine.
+4. **The free tier is flaky** — it occasionally answers HTTP 200 with an empty stream, or stalls for minutes before any content; reproduced against upstream directly, across models (2026-10-16). Just resend. Note that a few `*-free` ids are simply not enabled for the free tier (`400 Model is unavailable`) — `codex-ocfree refresh` filters those out.
 
 ## License
 

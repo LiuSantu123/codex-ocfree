@@ -47,7 +47,13 @@ import {
 import { initHome, installWrapper, codexHomeFor } from './profiles.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const MODEL_PREF = ['mimo-v2.6-flash-free', 'mimo-v2.5-free', 'big-pickle'];
+// Keep in sync with cli.mjs DEFAULT_MODEL_PREF (see note there).
+const MODEL_PREF = [
+  'deepseek-v4.1-flash-free',
+  'glm-5.3-flash-free',
+  'mimo-v2.6-flash-free',
+  'big-pickle',
+];
 
 const DSH_HOME = path.join(HOME, '.dsh');
 const DSH_PATCH = path.join(DSH_HOME, 'cordis.patch.yml'); // dsh 0.2.0-rc.2: top-level YAML array (verified)

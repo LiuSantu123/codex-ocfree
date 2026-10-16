@@ -28,7 +28,7 @@ https://opencode.ai/inference/openai/v1/chat/completions   ← OpenCode Zen 免�
 1. **本项目以 [PolyForm Noncommercial 1.0.0](LICENSE) 授权：禁止任何商业用途**；个人学习 / 研究 / 爱好项目可自由使用、修改、分发（保留许可证与 Required Notice）。详见[许可](#许可)。
 2. **上游风险自担**：桥通过本地转换访问 OpenCode 的免费模型端点，上游随时可能调整门禁或收紧访问。本项目与 OpenAI、OpenCode 及其关联方**无任何从属或背书关系**。
 3. **仓库不含任何 API key / token**；`codex-ocfree setup` 只在你的机器本地生成配置文件。
-4. 免费模型池会变（实测：34 个 `*-free` 中当时只有 6 个真正可用），目录会随 `codex-ocfree refresh` 更新。
+4. 免费模型池会变、且抖动频繁（2026-10-16 实测：上游 43 个 `*-free` 里只有 9 个真正可用，429 / 超时多为瞬时；`mimo-v2.5-free`、`fledge-alpha-free` 已被上游弃用）。目录随 `codex-ocfree refresh` 更新，**无需升级 codex-ocfree**。
 
 ## 功能
 
@@ -60,7 +60,7 @@ https://opencode.ai/inference/openai/v1/chat/completions   ← OpenCode Zen 免�
 git clone https://github.com/LiuSantu123/codex-ocfree.git && cd codex-ocfree && bash install.sh
 
 # B. Release 离线包：不 clone、不经 npm registry（tgz 是 release 附件）
-npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.2/codex-ocfree-0.3.2.tgz && codex-ocfree setup
+npm i -g --allow-remote=all https://github.com/LiuSantu123/codex-ocfree/releases/download/v0.3.3/codex-ocfree-0.3.3.tgz && codex-ocfree setup
 
 # C. npm 直装（走 GitHub 源）
 npm i -g --allow-git=all git+https://github.com/LiuSantu123/codex-ocfree.git && codex-ocfree setup
@@ -72,7 +72,7 @@ codex --profile opencode      # 开聊；会话历史与裸 codex 完全隔离
 
 `setup` = 写 profile + 探测可用模型（首次约 1 分钟，`--no-probe` 跳过）+ 生成模型目录 + 会话隔离 + shell 包装；方式 A 的 `install.sh` 已包含 setup。无 npm 的机器上 `install.sh` 自动降级为 `~/.local/bin` 软链。
 
-> npm ≥ 12 出于供应链安全默认 `allow-git=none` / `allow-remote=none`（禁用 git 源与远程 tarball 直装），所以 B/C 需要 `--allow-*` 放行（npm ≤ 11 可省略）。也可以把 tgz 下载到本地后安装：`npm i -g ./codex-ocfree-0.3.2.tgz`（本地文件不触发白名单）。
+> npm ≥ 12 出于供应链安全默认 `allow-git=none` / `allow-remote=none`（禁用 git 源与远程 tarball 直装），所以 B/C 需要 `--allow-*` 放行（npm ≤ 11 可省略）。也可以把 tgz 下载到本地后安装：`npm i -g ./codex-ocfree-0.3.3.tgz`（本地文件不触发白名单）。
 
 之后日常只需要两条命令：`codex-ocfree up`（桥常驻即可）和 `codex --profile opencode`。上游免费池会变，隔段时间跑一次 `codex-ocfree refresh` 更新可用模型。**其它 Agent（Claude Code / dsh / opencode…）用 helper 接入**：
 
@@ -195,6 +195,9 @@ codex-ocfree helper reset claude-code       # 逐键还原（含删除我们新�
 
 1. `codex-ocfree probe` —— 对每个 `*-free` 模型发一次最小请求，记录到 `~/.codex-ocfree/availability.json`（`ok` / `http4xx` / `ERR`）；
 2. `codex-ocfree catalog` —— 模型元数据**优先读 `opencode.db` 的本地缓存，缺失时自动回退到 `https://models.dev/api.json`**（无需安装 opencode），**只把 `ok` 的模型**写进 `~/.codex/opencode.models.json`（即 Codex 的 `model_catalog_json`），并过滤掉 Codex 不认的 `video` 等 modality 枚举。
+3. **默认模型**：全新 `setup`（或目录里还没有显式选过的模型）时，按内置偏好顺序挑第一个**可达**的：
+   `deepseek-v4.1-flash-free` → `glm-5.3-flash-free` → `mimo-v2.6-flash-free` → `big-pickle`。
+   已显式选过的默认不会被覆盖 —— `refresh` 只在原默认模型已从目录消失时才回退到该顺序。
 
 改了模型目录**不需要重启桥**；桥只管转发，`GET /v1/models` 每次实时读目录。
 
@@ -234,6 +237,7 @@ codex-ocfree helper reset claude-code       # 逐键还原（含删除我们新�
 | `ModelProtocolUnsupported` | 请求打到了 `/responses`：检查 profile `base_url = "http://127.0.0.1:8973/v1"`、`wire_api = "responses"`、桥在跑（`codex-ocfree status`） |
 | 403 / `FreeTierError` | 上游门禁变了：UA 需 `opencode/<semver>/cli`、session 前 12 hex 必须按 `(0xffe - 4096*now_ms) mod 2^48` 生成（不能随机，见 `newSessionId()`）、body 需 `stream:true` 且 tools 含 `read`+`shell` |
 | 429 / `FreeUsageLimitError` | 免费额度触顶（约 200 次/5h 窗口，社区实测值）。等窗口滑过；`codex-ocfree quota` 看本地进度与触顶记录 |
+| 模型回空内容 / 长时间不出字 | 上游免费端点偶发：HTTP 200 但正文为空（直连上游同样复现，deepseek / glm / mimo 都有，与桥无关）。**直接重发**通常即可；连续出现再用 `codex-ocfree quota` 排除触顶 |
 | 401 | 过期 OAuth token；桥会自动降级为匿名重试，仍持续就 `codex-ocfree down && codex-ocfree up` |
 | codex 警告 `Model metadata not found` | `model_catalog_json` 路径不对，或 JSON 含 Codex 不认的枚举 — 用 `codex-ocfree catalog` 重新生成 |
 | `codex --profile X` 没隔离会话 | shell 包装没装/没重载 — `codex-ocfree doctor` 看那一行（bash/zsh 都检查），或用 `codex-ocfree run -p X` |
